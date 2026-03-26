@@ -26,6 +26,38 @@ export type BikeCategory =
 export type FlexibilityLevel = 'low' | 'moderate' | 'high';
 export type ExperienceLevel = 'beginner' | 'intermediate' | 'advanced';
 export type RidingGoal = 'comfort' | 'endurance' | 'balanced' | 'aggressive / performance';
+export type AgeRange = 'Under 18' | '18-24' | '25-34' | '35-44' | '45-54' | '55-64' | '65+';
+export type BiologicalSexOption = 'Female' | 'Male' | 'Intersex / another variation' | 'Prefer not to say';
+export type RideType =
+  | 'Comfort / leisure'
+  | 'Endurance / long rides'
+  | 'Race / fast group rides'
+  | 'Training / fitness'
+  | 'Adventure / mixed terrain'
+  | 'Commuting / utility'
+  | 'Trail / technical fun'
+  | 'Downhill / gravity';
+export type TerrainOption =
+  | 'Paved road'
+  | 'Mixed road'
+  | 'Gravel / dirt roads'
+  | 'Singletrack / trail'
+  | 'Bike park / downhill'
+  | 'Urban / city'
+  | 'Touring / loaded mixed terrain';
+export type CurrentBikeType =
+  | 'Road'
+  | 'Triathlon / TT'
+  | 'Gravel'
+  | 'Cyclocross'
+  | 'MTB XC'
+  | 'MTB Trail'
+  | 'MTB Enduro / Downhill'
+  | 'Hybrid / Fitness'
+  | 'Commuter / City'
+  | 'Touring / Bikepacking'
+  | 'BMX / Dirt jump'
+  | 'Other / unsure';
 
 export type PainPoint =
   | 'Front knee pain'
@@ -44,16 +76,17 @@ export type PainPoint =
 
 export interface RiderProfile {
   riderId: string;
-  ageRange?: string;
-  biologicalSex?: string;
+  ageRange?: AgeRange;
+  biologicalSex?: BiologicalSexOption;
   heightCm: number;
   weightKg: number;
   flexibilityLevel: FlexibilityLevel;
   experienceLevel: ExperienceLevel;
   ridingGoal: RidingGoal;
-  preferredTerrain: string;
+  rideType: RideType;
+  preferredTerrain: TerrainOption;
   shoeSize: number;
-  currentBikeType?: string;
+  currentBikeType?: CurrentBikeType;
   frameSize?: string;
   stemLengthMm?: number;
   handlebarWidthMm?: number;

@@ -1,9 +1,60 @@
 import { BIKE_CATEGORY_CONFIG } from '../../config/bikeCategories';
 import { FORMULA_COEFFICIENTS } from '../../config/formulas';
 import { ISSUE_ADJUSTMENTS } from '../../config/issues';
-import { AppState, FitRecommendationItem, FitResult, MeasurementValue } from '../../types';
+import { AppState, FitRecommendationItem, FitResult, MeasurementValue, RideType } from '../../types';
 import { formatRange, formatValue } from '../../utils/format';
 import { avg, clamp, round } from '../../utils/math';
+
+const RIDE_TYPE_ADJUSTMENTS: Record<RideType, { reachDeltaMm: number; stackDeltaMm: number; dropDeltaMm: number; note: string }> = {
+  'Comfort / leisure': {
+    reachDeltaMm: -8,
+    stackDeltaMm: 10,
+    dropDeltaMm: -12,
+    note: 'Comfort-focused rides usually support a shorter cockpit and a taller front end.',
+  },
+  'Endurance / long rides': {
+    reachDeltaMm: -2,
+    stackDeltaMm: 4,
+    dropDeltaMm: -4,
+    note: 'Long-distance riding usually favors a sustainable posture over a maximal racing position.',
+  },
+  'Race / fast group rides': {
+    reachDeltaMm: 8,
+    stackDeltaMm: -6,
+    dropDeltaMm: 10,
+    note: 'Race-oriented riding shifts fit targets toward a longer, lower, more aerodynamic position.',
+  },
+  'Training / fitness': {
+    reachDeltaMm: 2,
+    stackDeltaMm: 0,
+    dropDeltaMm: 2,
+    note: 'General training keeps a fairly neutral posture unless other inputs point more strongly one way.',
+  },
+  'Adventure / mixed terrain': {
+    reachDeltaMm: -4,
+    stackDeltaMm: 6,
+    dropDeltaMm: -6,
+    note: 'Adventure riding usually benefits from extra control and a slightly more upright front end.',
+  },
+  'Commuting / utility': {
+    reachDeltaMm: -8,
+    stackDeltaMm: 12,
+    dropDeltaMm: -12,
+    note: 'Utility riding often rewards comfort, visibility, and easier handling over outright speed.',
+  },
+  'Trail / technical fun': {
+    reachDeltaMm: -2,
+    stackDeltaMm: 8,
+    dropDeltaMm: -10,
+    note: 'Technical trail riding benefits from a slightly taller, more controllable front-end setup.',
+  },
+  'Downhill / gravity': {
+    reachDeltaMm: -4,
+    stackDeltaMm: 12,
+    dropDeltaMm: -18,
+    note: 'Gravity riding strongly favors control, clearance, and a less saddle-centric posture.',
+  },
+};
 
 function metricConfidence(cameraValue?: number, cameraConfidence?: number, manualValue?: number): { value: number; source: 'camera' | 'manual' | 'assumed'; confidence: number } {
   if (manualValue && (!cameraValue || (cameraConfidence ?? 0) < 0.55)) {
@@ -28,6 +79,7 @@ function makeItem(key: string, label: string, value: number, spread: number, uni
 
 export function calculateFit(state: AppState): FitResult {
   const category = BIKE_CATEGORY_CONFIG[state.bikeSelection.category];
+  const rideType = RIDE_TYPE_ADJUSTMENTS[state.riderProfile.rideType];
   const camera = state.cameraEstimates;
   const issueMods = state.issues.selected.map((issue) => ISSUE_ADJUSTMENTS[issue]);
   const totalIssueReach = issueMods.reduce((sum, item) => sum + item.reachDeltaMm, 0);
@@ -55,15 +107,17 @@ export function calculateFit(state: AppState): FitResult {
     (flexibilityScore - 0.5) * FORMULA_COEFFICIENTS.cockpit.flexibilityFactor * 10 +
     goalFactor * FORMULA_COEFFICIENTS.cockpit.goalFactor +
     category.reachBiasMm +
+    rideType.reachDeltaMm +
     totalIssueReach;
 
   const baseStackMm =
     state.riderProfile.heightCm * FORMULA_COEFFICIENTS.frame.stackFromHeight +
     (1 - flexibilityScore) * 20 +
     category.stackBiasMm +
+    rideType.stackDeltaMm +
     totalIssueStack;
 
-  const baseDropMm = clamp(category.dropBiasMm + goalFactor * 18 + (flexibilityScore - 0.5) * 30 + totalIssueDrop, -60, 90);
+  const baseDropMm = clamp(category.dropBiasMm + goalFactor * 18 + (flexibilityScore - 0.5) * 30 + rideType.dropDeltaMm + totalIssueDrop, -60, 90);
   const saddleSetbackMm = clamp((inseam.value * 10 * 0.09) + (category.family === 'mtb' ? -5 : 0), 35, 95);
 
   let crank = 170;
@@ -74,7 +128,7 @@ export function calculateFit(state: AppState): FitResult {
   crank = clamp(crank + category.crankBiasMm + totalIssueCrank, 160, 180);
 
   const handlebarWidthMm = shoulder.value > 0 ? clamp(shoulder.value * 10, 360, 520) : 420;
-  const stemCenterMm = clamp(avg(category.stemRangeMm) + totalIssueReach * 0.25 + goalFactor * 5, category.stemRangeMm[0], category.stemRangeMm[1]);
+  const stemCenterMm = clamp(avg(category.stemRangeMm) + totalIssueReach * 0.25 + goalFactor * 5 + rideType.reachDeltaMm * 0.15, category.stemRangeMm[0], category.stemRangeMm[1]);
   const effectiveTopTubeMm = round(baseReachMm + 210, 0);
   const frameSizeEstimate = round(inseam.value * 0.67, 0);
 
@@ -93,6 +147,8 @@ export function calculateFit(state: AppState): FitResult {
     'Absolute body dimensions are estimated using camera landmarks plus calibration scale and user-entered height checks.',
     'Recommendations are conservative starting points for new-bike sizing, not a dynamic pedaling fit.',
     'Where camera confidence was low, manual inputs or population-based defaults were weighted more heavily.',
+    `Ride type "${state.riderProfile.rideType}" and terrain "${state.riderProfile.preferredTerrain}" were used as structured dropdown inputs to keep the fit logic more precise and repeatable.`,
+    rideType.note,
   ];
 
   const warnings = [
@@ -102,13 +158,13 @@ export function calculateFit(state: AppState): FitResult {
   ];
 
   return {
-    frameSize: makeItem('frameSize', 'Recommended frame size', frameSizeEstimate, 2, 'cm', commonConfidence, 'Frame size is primarily driven by inseam, bike category, and posture bias.'),
-    effectiveTopTube: makeItem('effectiveTopTube', 'Effective top tube target', effectiveTopTubeMm, 12, 'mm', commonConfidence, 'Top tube target reflects cockpit demand from torso, arm estimate, goal, and category.'),
-    stack: makeItem('stack', 'Stack target', baseStackMm, 14, 'mm', commonConfidence, 'Stack is biased by height, flexibility, category defaults, and comfort modifiers.'),
-    reach: makeItem('reach', 'Reach target', baseReachMm, 10, 'mm', commonConfidence, 'Reach is weighted from torso and arm estimate, then adjusted by goals and issues.'),
+    frameSize: makeItem('frameSize', 'Recommended frame size', frameSizeEstimate, 2, 'cm', commonConfidence, 'Frame size is primarily driven by inseam, bike category, ride type, and posture bias.'),
+    effectiveTopTube: makeItem('effectiveTopTube', 'Effective top tube target', effectiveTopTubeMm, 12, 'mm', commonConfidence, 'Top tube target reflects cockpit demand from torso, arm estimate, ride type, goal, and category.'),
+    stack: makeItem('stack', 'Stack target', baseStackMm, 14, 'mm', commonConfidence, 'Stack is biased by height, flexibility, category defaults, ride type, and comfort modifiers.'),
+    reach: makeItem('reach', 'Reach target', baseReachMm, 10, 'mm', commonConfidence, 'Reach is weighted from torso and arm estimate, then adjusted by ride goal, ride type, and reported issues.'),
     saddleHeight: makeItem('saddleHeight', 'Saddle height', saddleHeightMm, 8, 'mm', clamp(inseam.confidence - issuePenalty * 0.3, 0.25, 0.92), 'Saddle height starts from inseam-based heuristics and is moderated by flexibility.'),
     saddleSetback: makeItem('saddleSetback', 'Saddle setback', saddleSetbackMm, 8, 'mm', clamp(inseam.confidence - 0.05, 0.25, 0.88), 'Setback is a conservative estimate based on leg length and category family.'),
-    saddleToBarDrop: makeItem('saddleToBarDrop', 'Saddle-to-bar drop', baseDropMm, 10, 'mm', commonConfidence, 'Drop changes the most with category, goal, flexibility, and pain modifiers.'),
+    saddleToBarDrop: makeItem('saddleToBarDrop', 'Saddle-to-bar drop', baseDropMm, 10, 'mm', commonConfidence, 'Drop changes the most with category, ride type, goal, flexibility, and pain modifiers.'),
     handlebarWidth: makeItem('handlebarWidth', 'Handlebar width', handlebarWidthMm, 10, 'mm', shoulder.confidence, 'Bar width follows shoulder width with conservative clamping by common market sizes.'),
     stemLength: makeItem('stemLength', 'Stem length range center', stemCenterMm, 10, 'mm', commonConfidence, 'Stem recommendation complements frame reach and category-specific handling preferences.'),
     crankLength: makeItem('crankLength', 'Crank length', crank, 2.5, 'mm', clamp(inseam.confidence - 0.03, 0.25, 0.9), 'Crank length is based on inseam bins, then adjusted for category and hip/knee caution.'),
