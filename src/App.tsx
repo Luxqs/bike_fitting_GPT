@@ -15,6 +15,7 @@ import { usePoseCapture } from './features/camera/usePoseCapture';
 import { calculateFit } from './features/fit-engine/calculateFit';
 import { estimateMeasurementsFromFrames } from './features/measurements/estimateMeasurements';
 import { exportFitPdf } from './features/results/exportPdf';
+import { buildMailtoUrl, buildWhatsAppUrl, shareViaWebShare } from './features/results/shareFit';
 import { useAppState } from './hooks/useAppState';
 import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
 import './styles.css';
@@ -27,6 +28,7 @@ export default function App() {
   const [captureIndex, setCaptureIndex] = useState(0);
   const [countdown, setCountdown] = useState(0);
   const [capturePaused, setCapturePaused] = useState(false);
+  const [shareStatus, setShareStatus] = useState<string>('');
   const timerRef = useRef<number | null>(null);
 
   const updateAppState = (updater: (prev: AppState) => AppState) => {
@@ -141,6 +143,7 @@ export default function App() {
 
   const currentStage = CAPTURE_PROTOCOL[Math.min(captureIndex, CAPTURE_PROTOCOL.length - 1)];
   const captureReady = camera.frames.length >= MIN_CAPTURED_FRAMES;
+  const webShareSupported = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   const togglePainPoint = (painPoint: PainPoint, checked: boolean) => {
     updateAppState((previous) => {
@@ -189,6 +192,28 @@ export default function App() {
       fitResult: calculateFit(previous),
     }));
     nextStep();
+  };
+
+  const handleEmailShare = () => {
+    setShareStatus('');
+    window.location.href = buildMailtoUrl(state);
+  };
+
+  const handleWhatsAppShare = () => {
+    setShareStatus('');
+    window.open(buildWhatsAppUrl(state), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWebShare = async () => {
+    try {
+      setShareStatus('');
+      const shared = await shareViaWebShare(state);
+      if (!shared) {
+        setShareStatus('Native sharing is not supported in this browser.');
+      }
+    } catch {
+      setShareStatus('Sharing was canceled or could not be completed.');
+    }
   };
 
   const cameraPreview = (
@@ -477,7 +502,7 @@ export default function App() {
     ];
 
     return (
-      <WizardLayout title="Results dashboard" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={() => exportFitPdf(state)} nextLabel="Export PDF">
+      <WizardLayout title="Results dashboard" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={() => exportFitPdf(state)} nextLabel="Download PDF">
         <div className="grid two">
           <div className="card">
             <h3>Rider summary</h3>
@@ -493,6 +518,17 @@ export default function App() {
             <h3>Professional fitter disclaimer</h3>
             <p>Validate final bike choice and contact points with a professional fitter, especially if you have pain, injuries, asymmetries, or recurring discomfort.</p>
           </div>
+        </div>
+        <div className="card">
+          <h3>Share your ideal bike measurements</h3>
+          <p className="helper">You can download a PDF, open an email draft, send the summary to WhatsApp, or use native device sharing when the browser supports it.</p>
+          <div className="button-row">
+            <button onClick={() => exportFitPdf(state)}>Download PDF</button>
+            <button className="secondary" onClick={handleEmailShare}>Email</button>
+            <button className="secondary" onClick={handleWhatsAppShare}>WhatsApp</button>
+            {webShareSupported && <button className="secondary" onClick={handleWebShare}>Share</button>}
+          </div>
+          {shareStatus && <p className="helper">{shareStatus}</p>}
         </div>
         <div className="results-grid">
           {items.map((item) => (
