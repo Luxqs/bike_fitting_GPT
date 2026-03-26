@@ -47,6 +47,27 @@ export function usePoseCapture() {
   const [lastConfidence, setLastConfidence] = useState(0);
   const [frames, setFrames] = useState<CapturedFrame[]>([]);
 
+  const attachStreamToCurrentVideo = useCallback(async () => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+
+    if (!video || !stream) {
+      return;
+    }
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+
+    if (video.paused || video.readyState < 2) {
+      try {
+        await video.play();
+      } catch {
+        // The user already granted camera access. If autoplay is delayed, the next render or interaction can retry.
+      }
+    }
+  }, []);
+
   const stopOverlayLoop = useCallback(() => {
     overlayActiveRef.current = false;
     if (rafRef.current) {
@@ -59,6 +80,9 @@ export function usePoseCapture() {
     stopOverlayLoop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setIsReady(false);
   }, [stopOverlayLoop]);
 
@@ -90,11 +114,7 @@ export function usePoseCapture() {
       });
       streamRef.current = stream;
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
+      await attachStreamToCurrentVideo();
       setIsReady(true);
     } catch (initError) {
       const message = initError instanceof Error ? initError.message : 'Camera initialization failed';
@@ -105,11 +125,15 @@ export function usePoseCapture() {
       initializingRef.current = false;
       setIsInitializing(false);
     }
-  }, [isReady, stop]);
+  }, [attachStreamToCurrentVideo, isReady, stop]);
 
   useEffect(() => {
     return () => stop();
   }, [stop]);
+
+  useEffect(() => {
+    void attachStreamToCurrentVideo();
+  });
 
   const startOverlayLoop = useCallback(() => {
     if (overlayActiveRef.current) {
