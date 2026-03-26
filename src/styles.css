@@ -1,0 +1,47 @@
+:root {
+  font-family: Inter, Arial, sans-serif;
+  color: #111827;
+  background: #f3f4f6;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+button {
+  border: none;
+  border-radius: 12px;
+  padding: 12px 18px;
+  background: #111827;
+  color: white;
+  cursor: pointer;
+}
+button.secondary { background: #e5e7eb; color: #111827; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.page-shell { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.progress-bar { height: 10px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin-bottom: 20px; }
+.progress-bar span { display: block; height: 100%; background: #2563eb; }
+.page-header h1 { margin: 0 0 8px; }
+.page-header p { margin: 0 0 20px; color: #4b5563; }
+.page-actions { display: flex; justify-content: space-between; margin-top: 24px; gap: 12px; }
+.grid { display: grid; gap: 16px; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.card { background: white; padding: 18px; border-radius: 18px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
+.card.warn { border: 1px solid #f59e0b; }
+.field { display: flex; flex-direction: column; gap: 8px; }
+.field input, .field select, .field textarea { padding: 12px; border-radius: 12px; border: 1px solid #d1d5db; background: white; }
+.field.wide { grid-column: span 2; }
+.camera-shell { background: #111827; border-radius: 18px; overflow: hidden; min-height: 360px; position: relative; }
+.camera-canvas { width: 100%; height: 100%; display: block; }
+.video-hidden { display: none; }
+.checkbox-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.checkbox-item { display: flex; gap: 10px; align-items: center; background: white; padding: 12px; border-radius: 12px; }
+.results-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.metric { font-size: 28px; font-weight: 700; }
+.helper { color: #6b7280; font-size: 14px; }
+pre { white-space: pre-wrap; word-break: break-word; }
+ul { margin-top: 8px; }
+@media (max-width: 900px) {
+  .grid.two, .grid.three, .grid.four, .results-grid, .checkbox-grid { grid-template-columns: 1fr; }
+  .page-shell { padding: 16px; }
+}
