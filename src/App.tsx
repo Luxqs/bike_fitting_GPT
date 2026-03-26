@@ -184,6 +184,13 @@ export default function App() {
     nextStep();
   };
 
+  const cameraPreview = (
+    <div className="camera-shell">
+      <video ref={camera.videoRef} className="camera-video" playsInline muted autoPlay />
+      <canvas ref={camera.canvasRef} className="camera-canvas" />
+    </div>
+  );
+
   const renderWelcome = () => (
     <WizardLayout
       title="BikeFit Camera"
@@ -269,13 +276,11 @@ export default function App() {
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
             <span className="status-pill">Landmark confidence: {Math.round(camera.lastConfidence * 100)}%</span>
           </div>
+          <p className="helper">You should see your raw camera image under the landmark overlay. If the overlay fails, the live video should still be visible.</p>
           {camera.isInitializing && <p>Initializing camera and pose detector…</p>}
           {camera.error && <p>{camera.error}</p>}
         </div>
-        <div className="camera-shell">
-          <video ref={camera.videoRef} className="video-hidden" playsInline muted />
-          <canvas ref={camera.canvasRef} className="camera-canvas" />
-        </div>
+        {cameraPreview}
       </div>
     </WizardLayout>
   );
@@ -322,10 +327,7 @@ export default function App() {
             <button className="secondary" onClick={restartCaptureFlow}>Retry all capture steps</button>
           </div>
         </div>
-        <div className="camera-shell">
-          <video ref={camera.videoRef} className="video-hidden" playsInline muted />
-          <canvas ref={camera.canvasRef} className="camera-canvas" />
-        </div>
+        {cameraPreview}
       </div>
     </WizardLayout>
   );
