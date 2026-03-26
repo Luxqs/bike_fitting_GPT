@@ -65,6 +65,45 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .status-okay { background: #fef3c7; color: #92400e; }
 .status-low { background: #fee2e2; color: #991b1b; }
 .button-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.stage-sequence {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.stage-sequence-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+.stage-sequence-item.current {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+.stage-sequence-item.done {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+.checklist {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.checklist-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+}
+.checklist-item.good {
+  color: #166534;
+}
+.checklist-item.bad {
+  color: #991b1b;
+}
+.hold-progress {
+  margin-bottom: 12px;
+}
 pre { white-space: pre-wrap; word-break: break-word; }
 ul { margin-top: 8px; }
 @media (max-width: 900px) {

@@ -11,6 +11,7 @@ import {
 } from './config/dropdownOptions';
 import { CAPTURE_PROTOCOL } from './config/captureProtocol';
 import { CalibrationPanel } from './features/calibration/CalibrationPanel';
+import { evaluatePoseReadiness } from './features/camera/poseReadiness';
 import { usePoseCapture } from './features/camera/usePoseCapture';
 import { calculateFit } from './features/fit-engine/calculateFit';
 import { estimateMeasurementsFromFrames } from './features/measurements/estimateMeasurements';
@@ -26,8 +27,8 @@ export default function App() {
   const { state, setState, nextStep, prevStep, stepIndex, totalSteps } = useAppState();
   const camera = usePoseCapture();
   const [captureIndex, setCaptureIndex] = useState(0);
-  const [countdown, setCountdown] = useState(0);
   const [capturePaused, setCapturePaused] = useState(false);
+  const [holdProgressMs, setHoldProgressMs] = useState(0);
   const [shareStatus, setShareStatus] = useState<string>('');
   const timerRef = useRef<number | null>(null);
 
@@ -93,41 +94,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [camera, state.step]);
+  }, [camera.error, camera.init, camera.isInitializing, camera.isReady, camera.startOverlayLoop, state.step]);
 
   useEffect(() => {
     if (state.step !== 'capture') {
       clearCaptureTimer();
-      setCountdown(0);
-      return;
+      setHoldProgressMs(0);
     }
-
-    const stage = CAPTURE_PROTOCOL[captureIndex];
-    if (!stage || capturePaused) {
-      clearCaptureTimer();
-      return;
-    }
-
-    setCountdown(stage.seconds);
-    clearCaptureTimer();
-    timerRef.current = window.setInterval(() => {
-      setCountdown((previousCount) => {
-        if (previousCount <= 1) {
-          camera.captureFrame(stage.view, stage.id);
-          clearCaptureTimer();
-          if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
-            setCaptureIndex((previousIndex) => previousIndex + 1);
-          }
-          return 0;
-        }
-        return previousCount - 1;
-      });
-    }, 1000);
-
-    return () => {
-      clearCaptureTimer();
-    };
-  }, [camera, captureIndex, capturePaused, state.step]);
+  }, [state.step]);
 
   useEffect(() => {
     if (state.step === 'capture') {
@@ -144,6 +118,44 @@ export default function App() {
   const currentStage = CAPTURE_PROTOCOL[Math.min(captureIndex, CAPTURE_PROTOCOL.length - 1)];
   const captureReady = camera.frames.length >= MIN_CAPTURED_FRAMES;
   const webShareSupported = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  const stageReadiness = useMemo(
+    () => evaluatePoseReadiness(currentStage, camera.liveLandmarks, camera.frameSize),
+    [camera.frameSize, camera.liveLandmarks, currentStage],
+  );
+  const holdProgressRatio = Math.min(holdProgressMs / (currentStage.holdSeconds * 1000), 1);
+
+  useEffect(() => {
+    if (state.step !== 'capture' || capturePaused) {
+      clearCaptureTimer();
+      setHoldProgressMs(0);
+      return;
+    }
+
+    if (!stageReadiness.ready) {
+      clearCaptureTimer();
+      setHoldProgressMs(0);
+      return;
+    }
+
+    clearCaptureTimer();
+    timerRef.current = window.setInterval(() => {
+      setHoldProgressMs((previousMs) => {
+        const nextMs = previousMs + 250;
+        if (nextMs >= currentStage.holdSeconds * 1000) {
+          const captured = camera.captureFrame(currentStage.view, currentStage.id);
+          if (captured) {
+            setCaptureIndex((previousIndex) => Math.min(previousIndex + 1, CAPTURE_PROTOCOL.length - 1));
+          }
+          return 0;
+        }
+        return nextMs;
+      });
+    }, 250);
+
+    return () => {
+      clearCaptureTimer();
+    };
+  }, [camera.captureFrame, capturePaused, currentStage.holdSeconds, currentStage.id, currentStage.view, stageReadiness.ready, state.step]);
 
   const togglePainPoint = (painPoint: PainPoint, checked: boolean) => {
     updateAppState((previous) => {
@@ -163,6 +175,7 @@ export default function App() {
   };
 
   const skipCurrentStage = () => {
+    setHoldProgressMs(0);
     if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
       setCaptureIndex((previousIndex) => previousIndex + 1);
     }
@@ -171,9 +184,19 @@ export default function App() {
   const restartCaptureFlow = () => {
     clearCaptureTimer();
     setCaptureIndex(0);
-    setCountdown(0);
+    setHoldProgressMs(0);
     setCapturePaused(false);
     camera.setFrames([]);
+  };
+
+  const handleManualCapture = () => {
+    const captured = camera.captureFrame(currentStage.view, currentStage.id);
+    if (captured) {
+      setHoldProgressMs(0);
+      if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
+        setCaptureIndex((previousIndex) => previousIndex + 1);
+      }
+    }
   };
 
   const handleUseCapture = () => {
@@ -220,6 +243,20 @@ export default function App() {
     <div className="camera-shell">
       <video ref={camera.videoRef} className="camera-video" playsInline muted autoPlay />
       <canvas ref={camera.canvasRef} className="camera-canvas" />
+    </div>
+  );
+
+  const renderCaptureSequence = () => (
+    <div className="stage-sequence">
+      {CAPTURE_PROTOCOL.map((stage, index) => {
+        const statusClass = index < captureIndex ? 'done' : index === captureIndex ? 'current' : 'upcoming';
+        return (
+          <div key={stage.id} className={`stage-sequence-item ${statusClass}`}>
+            <strong>{index + 1}. {stage.title}</strong>
+            <div className="helper">{stage.view} view{stage.optional ? ' · optional' : ''}</div>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -353,18 +390,20 @@ export default function App() {
     <WizardLayout title="Camera setup" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
       <div className="grid two">
         <div className="card">
-          <h3>Instructions</h3>
+          <h3>How to stand for capture</h3>
           <ul>
             <li>Wear fitted clothing.</li>
-            <li>Show the full body in the frame.</li>
-            <li>Use front and side views.</li>
-            <li>Keep the camera stable at about hip-to-chest height.</li>
+            <li>Show your full body from head to feet.</li>
+            <li>Place the camera around hip-to-chest height.</li>
+            <li>Keep the room bright and avoid backlighting.</li>
+            <li>The app will auto-capture once you are in the correct position.</li>
           </ul>
           <div className="status-row">
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
             <span className="status-pill">Landmark confidence: {Math.round(camera.lastConfidence * 100)}%</span>
           </div>
-          <p className="helper">You should see your raw camera image under the landmark overlay. If the overlay fails, the live video should still be visible.</p>
+          <h3>Required positions</h3>
+          {renderCaptureSequence()}
           {camera.isInitializing && <p>Initializing camera and pose detector…</p>}
           {camera.error && <p>{camera.error}</p>}
         </div>
@@ -387,7 +426,7 @@ export default function App() {
   const renderCapture = () => (
     <WizardLayout
       title="Guided movement capture"
-      subtitle="Low-confidence frames are rejected automatically. You can pause, retry, or skip optional stages."
+      subtitle="Move into the requested position. The app captures automatically once all checklist items are green."
       stepIndex={stepIndex}
       totalSteps={totalSteps}
       onBack={prevStep}
@@ -401,19 +440,40 @@ export default function App() {
           <p>{currentStage.instruction}</p>
           <p>View: <strong>{currentStage.view}</strong></p>
           <p>Stage {captureIndex + 1} of {CAPTURE_PROTOCOL.length}</p>
-          <p>Countdown: <strong>{countdown}s</strong></p>
-          <p>Captured frames: <strong>{camera.frames.length}</strong></p>
           <div className="status-row">
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
+            <span className={`status-pill ${stageReadiness.ready ? 'status-good' : 'status-low'}`}>
+              {stageReadiness.ready ? 'Good position detected' : 'Waiting for better position'}
+            </span>
             {currentStage.optional && <span className="status-pill">Optional stage</span>}
           </div>
+          <h4>Stand like this</h4>
+          <ul>
+            {currentStage.positionTips.map((tip) => (
+              <li key={tip}>{tip}</li>
+            ))}
+          </ul>
+          <p className="helper">{stageReadiness.hint}</p>
+          <div className="checklist">
+            {stageReadiness.checks.map((check) => (
+              <div key={check.label} className={`checklist-item ${check.passed ? 'good' : 'bad'}`}>
+                <span>{check.passed ? '✓' : '•'}</span>
+                <span>{check.label}</span>
+              </div>
+            ))}
+          </div>
+          <p>Captured frames: <strong>{camera.frames.length}</strong></p>
+          <p>Auto-capture hold: <strong>{Math.round(holdProgressRatio * 100)}%</strong></p>
+          <div className="progress-bar hold-progress"><span style={{ width: `${holdProgressRatio * 100}%` }} /></div>
           {!captureReady && <p className="helper">Capture at least {MIN_CAPTURED_FRAMES} good frames before continuing.</p>}
           <div className="button-row">
-            <button className="secondary" onClick={() => camera.captureFrame(currentStage.view, currentStage.id)}>Capture now</button>
-            <button className="secondary" onClick={() => setCapturePaused((previous) => !previous)}>{capturePaused ? 'Resume countdown' : 'Pause countdown'}</button>
+            <button className="secondary" onClick={handleManualCapture}>Capture now</button>
+            <button className="secondary" onClick={() => setCapturePaused((previous) => !previous)}>{capturePaused ? 'Resume auto capture' : 'Pause auto capture'}</button>
             {currentStage.optional && <button className="secondary" onClick={skipCurrentStage}>Skip optional stage</button>}
             <button className="secondary" onClick={restartCaptureFlow}>Retry all capture steps</button>
           </div>
+          <h4>All positions in this sequence</h4>
+          {renderCaptureSequence()}
         </div>
         {cameraPreview}
       </div>
@@ -430,7 +490,7 @@ export default function App() {
       </div>
       <div className="card">
         <h3>Camera estimate preview</h3>
-        <p className="helper">Blank values here usually mean the app did not get enough reliable side-view frames or the calibration object scale was inconsistent. In that case, enter the values you know manually and continue.</p>
+        <p className="helper">If a value is missing or obviously wrong, enter the known manual value and continue.</p>
         <pre>{JSON.stringify(state.cameraEstimates, null, 2)}</pre>
       </div>
     </WizardLayout>
