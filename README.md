@@ -15,6 +15,15 @@ This MVP includes:
 - Transparent rule-based fit engine with config-driven modifiers
 - Results dashboard with confidence scores and PDF export
 
+## Hardening pass included
+This repository now also includes:
+- localStorage-backed wizard state persistence
+- safer camera initialization and overlay-loop guarding
+- retry / pause / skip controls in the capture wizard
+- a Vite environment declaration file
+- a basic `.gitignore`
+- a `typecheck` npm script
+
 ## Approximate parts in MVP
 - Absolute lengths depend on calibration quality and camera alignment
 - Calibration is manual-first in this MVP; automatic A4/card/ArUco detection is a future enhancement
@@ -41,18 +50,15 @@ npm run build
 npm run preview
 ```
 
-## Suggested repository structure
-Place the code in your repository:
-`https://github.com/Luxqs/bike_fitting_GPT.git`
-
-Then:
+## Type-check only
 ```bash
-git clone https://github.com/Luxqs/bike_fitting_GPT.git
-cd bike_fitting_GPT
-# copy these files in
-npm install
-npm run dev
+npm run typecheck
 ```
+
+## Notes for first run
+- Use a modern Chromium-based browser or Safari with camera access enabled.
+- The first camera start can take a moment while the MediaPipe model is loaded.
+- HTTPS or localhost is typically required for camera permissions.
 
 ## Architecture summary
 - `src/features/camera`: pose estimation and frame capture
