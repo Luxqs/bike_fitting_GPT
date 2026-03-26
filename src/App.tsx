@@ -177,7 +177,7 @@ export default function App() {
   };
 
   const handleUseCapture = () => {
-    const estimates = estimateMeasurementsFromFrames(camera.frames, state.calibration);
+    const estimates = estimateMeasurementsFromFrames(camera.frames, state.calibration, state.riderProfile.heightCm);
     updateAppState((previous) => ({
       ...previous,
       capturedFrames: camera.frames,
@@ -430,6 +430,7 @@ export default function App() {
       </div>
       <div className="card">
         <h3>Camera estimate preview</h3>
+        <p className="helper">Blank values here usually mean the app did not get enough reliable side-view frames or the calibration object scale was inconsistent. In that case, enter the values you know manually and continue.</p>
         <pre>{JSON.stringify(state.cameraEstimates, null, 2)}</pre>
       </div>
     </WizardLayout>
