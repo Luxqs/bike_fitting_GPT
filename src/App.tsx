@@ -11,6 +11,7 @@ import {
 } from './config/dropdownOptions';
 import { CAPTURE_PROTOCOL } from './config/captureProtocol';
 import { CalibrationPanel } from './features/calibration/CalibrationPanel';
+import { CaptureGuideOverlay } from './features/camera/CaptureGuideOverlay';
 import { evaluatePoseReadiness } from './features/camera/poseReadiness';
 import { usePoseCapture } from './features/camera/usePoseCapture';
 import { calculateFit } from './features/fit-engine/calculateFit';
@@ -22,6 +23,7 @@ import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, PAIN_OPTIONS
 import './styles.css';
 
 const MIN_CAPTURED_FRAMES = 5;
+const REQUIRED_STAGE_IDS = ['front-neutral', 'front-tpose', 'side-neutral', 'side-squat', 'side-hinge'] as const;
 
 export default function App() {
   const { state, setState, nextStep, prevStep, stepIndex, totalSteps } = useAppState();
@@ -116,13 +118,30 @@ export default function App() {
   }, [camera.lastConfidence]);
 
   const currentStage = CAPTURE_PROTOCOL[Math.min(captureIndex, CAPTURE_PROTOCOL.length - 1)];
-  const captureReady = camera.frames.length >= MIN_CAPTURED_FRAMES;
   const webShareSupported = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const stageReadiness = useMemo(
     () => evaluatePoseReadiness(currentStage, camera.liveLandmarks, camera.frameSize),
     [camera.frameSize, camera.liveLandmarks, currentStage],
   );
   const holdProgressRatio = Math.min(holdProgressMs / (currentStage.holdSeconds * 1000), 1);
+
+  const captureCoverage = useMemo(() => {
+    const capturedStageIds = new Set(camera.frames.map((frame) => frame.stageId));
+    const frontCount = camera.frames.filter((frame) => frame.view === 'front').length;
+    const sideCount = camera.frames.filter((frame) => frame.view === 'side').length;
+    const requiredMissing = REQUIRED_STAGE_IDS.filter((stageId) => !capturedStageIds.has(stageId));
+
+    return {
+      frontCount,
+      sideCount,
+      requiredMissing,
+      ready:
+        camera.frames.length >= MIN_CAPTURED_FRAMES &&
+        frontCount >= 2 &&
+        sideCount >= 2 &&
+        requiredMissing.length === 0,
+    };
+  }, [camera.frames]);
 
   useEffect(() => {
     if (state.step !== 'capture' || capturePaused) {
@@ -243,6 +262,7 @@ export default function App() {
     <div className="camera-shell">
       <video ref={camera.videoRef} className="camera-video" playsInline muted autoPlay />
       <canvas ref={camera.canvasRef} className="camera-canvas" />
+      <CaptureGuideOverlay stage={currentStage} />
     </div>
   );
 
@@ -396,7 +416,7 @@ export default function App() {
             <li>Show your full body from head to feet.</li>
             <li>Place the camera around hip-to-chest height.</li>
             <li>Keep the room bright and avoid backlighting.</li>
-            <li>The app will auto-capture once you are in the correct position.</li>
+            <li>The app will show tracked body parts and auto-capture when you are in the correct position.</li>
           </ul>
           <div className="status-row">
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
@@ -432,7 +452,7 @@ export default function App() {
       onBack={prevStep}
       onNext={handleUseCapture}
       nextLabel="Use capture"
-      disableNext={!captureReady}
+      disableNext={!captureCoverage.ready}
     >
       <div className="grid two">
         <div className="card">
@@ -453,6 +473,12 @@ export default function App() {
               <li key={tip}>{tip}</li>
             ))}
           </ul>
+          <h4>Live instructions</h4>
+          <div className="instruction-list">
+            {(stageReadiness.guidance.length ? stageReadiness.guidance : ['Good position detected. Hold still for automatic capture.']).map((instruction) => (
+              <div key={instruction} className="instruction-item">{instruction}</div>
+            ))}
+          </div>
           <p className="helper">{stageReadiness.hint}</p>
           <div className="checklist">
             {stageReadiness.checks.map((check) => (
@@ -462,10 +488,14 @@ export default function App() {
               </div>
             ))}
           </div>
-          <p>Captured frames: <strong>{camera.frames.length}</strong></p>
+          <p>Captured frames: <strong>{camera.frames.length}</strong> · Front: <strong>{captureCoverage.frontCount}</strong> · Side: <strong>{captureCoverage.sideCount}</strong></p>
           <p>Auto-capture hold: <strong>{Math.round(holdProgressRatio * 100)}%</strong></p>
           <div className="progress-bar hold-progress"><span style={{ width: `${holdProgressRatio * 100}%` }} /></div>
-          {!captureReady && <p className="helper">Capture at least {MIN_CAPTURED_FRAMES} good frames before continuing.</p>}
+          {!captureCoverage.ready && (
+            <p className="helper">
+              Before continuing, capture the essential positions. Missing: {captureCoverage.requiredMissing.length ? captureCoverage.requiredMissing.join(', ') : 'none'}.
+            </p>
+          )}
           <div className="button-row">
             <button className="secondary" onClick={handleManualCapture}>Capture now</button>
             <button className="secondary" onClick={() => setCapturePaused((previous) => !previous)}>{capturePaused ? 'Resume auto capture' : 'Pause auto capture'}</button>
@@ -490,7 +520,7 @@ export default function App() {
       </div>
       <div className="card">
         <h3>Camera estimate preview</h3>
-        <p className="helper">If a value is missing or obviously wrong, enter the known manual value and continue.</p>
+        <p className="helper">If a value is missing or obviously wrong, the camera likely could not see that body part well enough. Enter the known manual value and continue.</p>
         <pre>{JSON.stringify(state.cameraEstimates, null, 2)}</pre>
       </div>
     </WizardLayout>
