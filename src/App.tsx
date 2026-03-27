@@ -19,11 +19,48 @@ import { estimateMeasurementsFromFrames } from './features/measurements/estimate
 import { exportFitPdf } from './features/results/exportPdf';
 import { buildMailtoUrl, buildWhatsAppUrl, shareViaWebShare } from './features/results/shareFit';
 import { useAppState } from './hooks/useAppState';
-import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
+import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, LandmarkPoint, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
 import './styles.css';
 
 const MIN_CAPTURED_FRAMES = 5;
 const REQUIRED_STAGE_IDS = ['front-neutral', 'front-tpose', 'side-neutral', 'side-squat', 'side-hinge'] as const;
+const VISIBILITY_THRESHOLD = 0.35;
+const TRACKED_PARTS: Array<{ index: number; label: string }> = [
+  { index: 0, label: 'Head' },
+  { index: 15, label: 'Left hand' },
+  { index: 16, label: 'Right hand' },
+  { index: 23, label: 'Left hip' },
+  { index: 24, label: 'Right hip' },
+  { index: 25, label: 'Left knee' },
+  { index: 26, label: 'Right knee' },
+  { index: 27, label: 'Left foot' },
+  { index: 28, label: 'Right foot' },
+];
+
+function isPointVisible(
+  landmarks: LandmarkPoint[],
+  frameSize: { width: number; height: number } | null,
+  index: number,
+) {
+  if (!frameSize) {
+    return false;
+  }
+
+  const point = landmarks[index];
+  if (!point) {
+    return false;
+  }
+
+  const marginX = frameSize.width * 0.03;
+  const marginY = frameSize.height * 0.03;
+  return (
+    (point.visibility ?? 0) >= VISIBILITY_THRESHOLD &&
+    point.x > marginX &&
+    point.x < frameSize.width - marginX &&
+    point.y > marginY &&
+    point.y < frameSize.height - marginY
+  );
+}
 
 export default function App() {
   const { state, setState, nextStep, prevStep, stepIndex, totalSteps } = useAppState();
@@ -125,8 +162,14 @@ export default function App() {
   );
   const holdProgressRatio = Math.min(holdProgressMs / (currentStage.holdSeconds * 1000), 1);
 
+  const trackedPartsStatus = useMemo(
+    () => TRACKED_PARTS.map((part) => ({ ...part, visible: isPointVisible(camera.liveLandmarks, camera.frameSize, part.index) })),
+    [camera.frameSize, camera.liveLandmarks],
+  );
+
   const captureCoverage = useMemo(() => {
     const capturedStageIds = new Set(camera.frames.map((frame) => frame.stageId));
+    const stageTitleMap = new Map(CAPTURE_PROTOCOL.map((stage) => [stage.id, stage.title]));
     const frontCount = camera.frames.filter((frame) => frame.view === 'front').length;
     const sideCount = camera.frames.filter((frame) => frame.view === 'side').length;
     const requiredMissing = REQUIRED_STAGE_IDS.filter((stageId) => !capturedStageIds.has(stageId));
@@ -135,6 +178,7 @@ export default function App() {
       frontCount,
       sideCount,
       requiredMissing,
+      requiredMissingLabels: requiredMissing.map((stageId) => stageTitleMap.get(stageId) ?? stageId),
       ready:
         camera.frames.length >= MIN_CAPTURED_FRAMES &&
         frontCount >= 2 &&
@@ -422,6 +466,12 @@ export default function App() {
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
             <span className="status-pill">Landmark confidence: {Math.round(camera.lastConfidence * 100)}%</span>
           </div>
+          <h3>Tracked body parts</h3>
+          <div className="status-row">
+            {trackedPartsStatus.map((part) => (
+              <span key={part.label} className={`status-pill ${part.visible ? 'status-good' : 'status-low'}`}>{part.label}</span>
+            ))}
+          </div>
           <h3>Required positions</h3>
           {renderCaptureSequence()}
           {camera.isInitializing && <p>Initializing camera and pose detector…</p>}
@@ -467,6 +517,12 @@ export default function App() {
             </span>
             {currentStage.optional && <span className="status-pill">Optional stage</span>}
           </div>
+          <h4>Tracked body parts</h4>
+          <div className="status-row">
+            {trackedPartsStatus.map((part) => (
+              <span key={part.label} className={`status-pill ${part.visible ? 'status-good' : 'status-low'}`}>{part.label}</span>
+            ))}
+          </div>
           <h4>Stand like this</h4>
           <ul>
             {currentStage.positionTips.map((tip) => (
@@ -493,7 +549,7 @@ export default function App() {
           <div className="progress-bar hold-progress"><span style={{ width: `${holdProgressRatio * 100}%` }} /></div>
           {!captureCoverage.ready && (
             <p className="helper">
-              Before continuing, capture the essential positions. Missing: {captureCoverage.requiredMissing.length ? captureCoverage.requiredMissing.join(', ') : 'none'}.
+              Before continuing, capture the essential positions. Missing: {captureCoverage.requiredMissingLabels.length ? captureCoverage.requiredMissingLabels.join(', ') : 'none'}.
             </p>
           )}
           <div className="button-row">
