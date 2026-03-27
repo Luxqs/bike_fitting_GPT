@@ -1,13 +1,22 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Field } from './components/Field';
 import { WizardLayout } from './components/WizardLayout';
-import { BIKE_CATEGORY_CONFIG } from './config/bikeCategories';
+import {
+  AGE_RANGE_OPTIONS,
+  BIKE_CATEGORY_GROUPS,
+  BIOLOGICAL_SEX_OPTIONS,
+  CURRENT_BIKE_TYPE_OPTIONS,
+  RIDE_TYPE_OPTIONS,
+  TERRAIN_OPTIONS,
+} from './config/dropdownOptions';
 import { CAPTURE_PROTOCOL } from './config/captureProtocol';
 import { CalibrationPanel } from './features/calibration/CalibrationPanel';
+import { evaluatePoseReadiness } from './features/camera/poseReadiness';
 import { usePoseCapture } from './features/camera/usePoseCapture';
 import { calculateFit } from './features/fit-engine/calculateFit';
 import { estimateMeasurementsFromFrames } from './features/measurements/estimateMeasurements';
 import { exportFitPdf } from './features/results/exportPdf';
+import { buildMailtoUrl, buildWhatsAppUrl, shareViaWebShare } from './features/results/shareFit';
 import { useAppState } from './hooks/useAppState';
 import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
 import './styles.css';
@@ -18,8 +27,9 @@ export default function App() {
   const { state, setState, nextStep, prevStep, stepIndex, totalSteps } = useAppState();
   const camera = usePoseCapture();
   const [captureIndex, setCaptureIndex] = useState(0);
-  const [countdown, setCountdown] = useState(0);
   const [capturePaused, setCapturePaused] = useState(false);
+  const [holdProgressMs, setHoldProgressMs] = useState(0);
+  const [shareStatus, setShareStatus] = useState<string>('');
   const timerRef = useRef<number | null>(null);
 
   const updateAppState = (updater: (prev: AppState) => AppState) => {
@@ -84,41 +94,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [camera, state.step]);
+  }, [camera.error, camera.init, camera.isInitializing, camera.isReady, camera.startOverlayLoop, state.step]);
 
   useEffect(() => {
     if (state.step !== 'capture') {
       clearCaptureTimer();
-      setCountdown(0);
-      return;
+      setHoldProgressMs(0);
     }
-
-    const stage = CAPTURE_PROTOCOL[captureIndex];
-    if (!stage || capturePaused) {
-      clearCaptureTimer();
-      return;
-    }
-
-    setCountdown(stage.seconds);
-    clearCaptureTimer();
-    timerRef.current = window.setInterval(() => {
-      setCountdown((previousCount) => {
-        if (previousCount <= 1) {
-          camera.captureFrame(stage.view, stage.id);
-          clearCaptureTimer();
-          if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
-            setCaptureIndex((previousIndex) => previousIndex + 1);
-          }
-          return 0;
-        }
-        return previousCount - 1;
-      });
-    }, 1000);
-
-    return () => {
-      clearCaptureTimer();
-    };
-  }, [camera, captureIndex, capturePaused, state.step]);
+  }, [state.step]);
 
   useEffect(() => {
     if (state.step === 'capture') {
@@ -134,6 +117,45 @@ export default function App() {
 
   const currentStage = CAPTURE_PROTOCOL[Math.min(captureIndex, CAPTURE_PROTOCOL.length - 1)];
   const captureReady = camera.frames.length >= MIN_CAPTURED_FRAMES;
+  const webShareSupported = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+  const stageReadiness = useMemo(
+    () => evaluatePoseReadiness(currentStage, camera.liveLandmarks, camera.frameSize),
+    [camera.frameSize, camera.liveLandmarks, currentStage],
+  );
+  const holdProgressRatio = Math.min(holdProgressMs / (currentStage.holdSeconds * 1000), 1);
+
+  useEffect(() => {
+    if (state.step !== 'capture' || capturePaused) {
+      clearCaptureTimer();
+      setHoldProgressMs(0);
+      return;
+    }
+
+    if (!stageReadiness.ready) {
+      clearCaptureTimer();
+      setHoldProgressMs(0);
+      return;
+    }
+
+    clearCaptureTimer();
+    timerRef.current = window.setInterval(() => {
+      setHoldProgressMs((previousMs) => {
+        const nextMs = previousMs + 250;
+        if (nextMs >= currentStage.holdSeconds * 1000) {
+          const captured = camera.captureFrame(currentStage.view, currentStage.id);
+          if (captured) {
+            setCaptureIndex((previousIndex) => Math.min(previousIndex + 1, CAPTURE_PROTOCOL.length - 1));
+          }
+          return 0;
+        }
+        return nextMs;
+      });
+    }, 250);
+
+    return () => {
+      clearCaptureTimer();
+    };
+  }, [camera.captureFrame, capturePaused, currentStage.holdSeconds, currentStage.id, currentStage.view, stageReadiness.ready, state.step]);
 
   const togglePainPoint = (painPoint: PainPoint, checked: boolean) => {
     updateAppState((previous) => {
@@ -153,6 +175,7 @@ export default function App() {
   };
 
   const skipCurrentStage = () => {
+    setHoldProgressMs(0);
     if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
       setCaptureIndex((previousIndex) => previousIndex + 1);
     }
@@ -161,13 +184,23 @@ export default function App() {
   const restartCaptureFlow = () => {
     clearCaptureTimer();
     setCaptureIndex(0);
-    setCountdown(0);
+    setHoldProgressMs(0);
     setCapturePaused(false);
     camera.setFrames([]);
   };
 
+  const handleManualCapture = () => {
+    const captured = camera.captureFrame(currentStage.view, currentStage.id);
+    if (captured) {
+      setHoldProgressMs(0);
+      if (captureIndex < CAPTURE_PROTOCOL.length - 1) {
+        setCaptureIndex((previousIndex) => previousIndex + 1);
+      }
+    }
+  };
+
   const handleUseCapture = () => {
-    const estimates = estimateMeasurementsFromFrames(camera.frames, state.calibration);
+    const estimates = estimateMeasurementsFromFrames(camera.frames, state.calibration, state.riderProfile.heightCm);
     updateAppState((previous) => ({
       ...previous,
       capturedFrames: camera.frames,
@@ -184,10 +217,46 @@ export default function App() {
     nextStep();
   };
 
+  const handleEmailShare = () => {
+    setShareStatus('');
+    window.location.href = buildMailtoUrl(state);
+  };
+
+  const handleWhatsAppShare = () => {
+    setShareStatus('');
+    window.open(buildWhatsAppUrl(state), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWebShare = async () => {
+    try {
+      setShareStatus('');
+      const shared = await shareViaWebShare(state);
+      if (!shared) {
+        setShareStatus('Native sharing is not supported in this browser.');
+      }
+    } catch {
+      setShareStatus('Sharing was canceled or could not be completed.');
+    }
+  };
+
   const cameraPreview = (
     <div className="camera-shell">
       <video ref={camera.videoRef} className="camera-video" playsInline muted autoPlay />
       <canvas ref={camera.canvasRef} className="camera-canvas" />
+    </div>
+  );
+
+  const renderCaptureSequence = () => (
+    <div className="stage-sequence">
+      {CAPTURE_PROTOCOL.map((stage, index) => {
+        const statusClass = index < captureIndex ? 'done' : index === captureIndex ? 'current' : 'upcoming';
+        return (
+          <div key={stage.id} className={`stage-sequence-item ${statusClass}`}>
+            <strong>{index + 1}. {stage.title}</strong>
+            <div className="helper">{stage.view} view{stage.optional ? ' · optional' : ''}</div>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -222,11 +291,50 @@ export default function App() {
     <WizardLayout title="Rider profile" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
       <div className="grid four">
         <Field label="Name or rider ID" value={state.riderProfile.riderId} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('riderId', e.target.value)} />
+        <label className="field">
+          <span>Age range (optional)</span>
+          <select
+            value={state.riderProfile.ageRange ?? ''}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('ageRange', e.target.value ? (e.target.value as AppState['riderProfile']['ageRange']) : undefined)}
+          >
+            <option value="">Not provided</option>
+            {AGE_RANGE_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Biological sex (optional)</span>
+          <select
+            value={state.riderProfile.biologicalSex ?? ''}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('biologicalSex', e.target.value ? (e.target.value as AppState['riderProfile']['biologicalSex']) : undefined)}
+          >
+            <option value="">Not provided</option>
+            {BIOLOGICAL_SEX_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Current bike type (optional)</span>
+          <select
+            value={state.riderProfile.currentBikeType ?? ''}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('currentBikeType', e.target.value ? (e.target.value as AppState['riderProfile']['currentBikeType']) : undefined)}
+          >
+            <option value="">Not provided</option>
+            {CURRENT_BIKE_TYPE_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="grid four">
         <Field label="Height (cm)" type="number" value={state.riderProfile.heightCm} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('heightCm', Number(e.target.value))} />
         <Field label="Weight (kg)" type="number" value={state.riderProfile.weightKg} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('weightKg', Number(e.target.value))} />
         <Field label="Shoe size" type="number" value={state.riderProfile.shoeSize} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('shoeSize', Number(e.target.value))} />
+        <Field label="Current frame size (optional)" value={state.riderProfile.frameSize ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('frameSize', e.target.value)} />
       </div>
-      <div className="grid three">
+      <div className="grid four">
         <label className="field">
           <span>Flexibility</span>
           <select value={state.riderProfile.flexibilityLevel} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('flexibilityLevel', e.target.value as FlexibilityLevel)}>
@@ -244,7 +352,7 @@ export default function App() {
           </select>
         </label>
         <label className="field">
-          <span>Goal</span>
+          <span>Fit priority</span>
           <select value={state.riderProfile.ridingGoal} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('ridingGoal', e.target.value as RidingGoal)}>
             <option value="comfort">Comfort</option>
             <option value="endurance">Endurance</option>
@@ -252,11 +360,28 @@ export default function App() {
             <option value="aggressive / performance">Aggressive / performance</option>
           </select>
         </label>
+        <label className="field">
+          <span>Type of ride</span>
+          <select value={state.riderProfile.rideType} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('rideType', e.target.value as AppState['riderProfile']['rideType'])}>
+            {RIDE_TYPE_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
       </div>
-      <div className="grid three">
-        <Field label="Preferred terrain" value={state.riderProfile.preferredTerrain} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('preferredTerrain', e.target.value)} />
-        <Field label="Current bike type" value={state.riderProfile.currentBikeType ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('currentBikeType', e.target.value)} />
-        <Field label="Current frame size" value={state.riderProfile.frameSize ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('frameSize', e.target.value)} />
+      <div className="grid two">
+        <label className="field">
+          <span>Main terrain</span>
+          <select value={state.riderProfile.preferredTerrain} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('preferredTerrain', e.target.value as AppState['riderProfile']['preferredTerrain'])}>
+            {TERRAIN_OPTIONS.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <div className="card">
+          <h3>Why dropdowns?</h3>
+          <p className="helper">Structured dropdown choices make the fit engine use more precise and repeatable inputs than open free-text guesses.</p>
+        </div>
       </div>
     </WizardLayout>
   );
@@ -265,18 +390,20 @@ export default function App() {
     <WizardLayout title="Camera setup" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
       <div className="grid two">
         <div className="card">
-          <h3>Instructions</h3>
+          <h3>How to stand for capture</h3>
           <ul>
             <li>Wear fitted clothing.</li>
-            <li>Show the full body in the frame.</li>
-            <li>Use front and side views.</li>
-            <li>Keep the camera stable at about hip-to-chest height.</li>
+            <li>Show your full body from head to feet.</li>
+            <li>Place the camera around hip-to-chest height.</li>
+            <li>Keep the room bright and avoid backlighting.</li>
+            <li>The app will auto-capture once you are in the correct position.</li>
           </ul>
           <div className="status-row">
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
             <span className="status-pill">Landmark confidence: {Math.round(camera.lastConfidence * 100)}%</span>
           </div>
-          <p className="helper">You should see your raw camera image under the landmark overlay. If the overlay fails, the live video should still be visible.</p>
+          <h3>Required positions</h3>
+          {renderCaptureSequence()}
           {camera.isInitializing && <p>Initializing camera and pose detector…</p>}
           {camera.error && <p>{camera.error}</p>}
         </div>
@@ -299,7 +426,7 @@ export default function App() {
   const renderCapture = () => (
     <WizardLayout
       title="Guided movement capture"
-      subtitle="Low-confidence frames are rejected automatically. You can pause, retry, or skip optional stages."
+      subtitle="Move into the requested position. The app captures automatically once all checklist items are green."
       stepIndex={stepIndex}
       totalSteps={totalSteps}
       onBack={prevStep}
@@ -313,19 +440,40 @@ export default function App() {
           <p>{currentStage.instruction}</p>
           <p>View: <strong>{currentStage.view}</strong></p>
           <p>Stage {captureIndex + 1} of {CAPTURE_PROTOCOL.length}</p>
-          <p>Countdown: <strong>{countdown}s</strong></p>
-          <p>Captured frames: <strong>{camera.frames.length}</strong></p>
           <div className="status-row">
             <span className={`status-pill status-${qualityText.toLowerCase()}`}>Capture quality: {qualityText}</span>
+            <span className={`status-pill ${stageReadiness.ready ? 'status-good' : 'status-low'}`}>
+              {stageReadiness.ready ? 'Good position detected' : 'Waiting for better position'}
+            </span>
             {currentStage.optional && <span className="status-pill">Optional stage</span>}
           </div>
+          <h4>Stand like this</h4>
+          <ul>
+            {currentStage.positionTips.map((tip) => (
+              <li key={tip}>{tip}</li>
+            ))}
+          </ul>
+          <p className="helper">{stageReadiness.hint}</p>
+          <div className="checklist">
+            {stageReadiness.checks.map((check) => (
+              <div key={check.label} className={`checklist-item ${check.passed ? 'good' : 'bad'}`}>
+                <span>{check.passed ? '✓' : '•'}</span>
+                <span>{check.label}</span>
+              </div>
+            ))}
+          </div>
+          <p>Captured frames: <strong>{camera.frames.length}</strong></p>
+          <p>Auto-capture hold: <strong>{Math.round(holdProgressRatio * 100)}%</strong></p>
+          <div className="progress-bar hold-progress"><span style={{ width: `${holdProgressRatio * 100}%` }} /></div>
           {!captureReady && <p className="helper">Capture at least {MIN_CAPTURED_FRAMES} good frames before continuing.</p>}
           <div className="button-row">
-            <button className="secondary" onClick={() => camera.captureFrame(currentStage.view, currentStage.id)}>Capture now</button>
-            <button className="secondary" onClick={() => setCapturePaused((previous) => !previous)}>{capturePaused ? 'Resume countdown' : 'Pause countdown'}</button>
+            <button className="secondary" onClick={handleManualCapture}>Capture now</button>
+            <button className="secondary" onClick={() => setCapturePaused((previous) => !previous)}>{capturePaused ? 'Resume auto capture' : 'Pause auto capture'}</button>
             {currentStage.optional && <button className="secondary" onClick={skipCurrentStage}>Skip optional stage</button>}
             <button className="secondary" onClick={restartCaptureFlow}>Retry all capture steps</button>
           </div>
+          <h4>All positions in this sequence</h4>
+          {renderCaptureSequence()}
         </div>
         {cameraPreview}
       </div>
@@ -342,6 +490,7 @@ export default function App() {
       </div>
       <div className="card">
         <h3>Camera estimate preview</h3>
+        <p className="helper">If a value is missing or obviously wrong, enter the known manual value and continue.</p>
         <pre>{JSON.stringify(state.cameraEstimates, null, 2)}</pre>
       </div>
     </WizardLayout>
@@ -349,16 +498,28 @@ export default function App() {
 
   const renderBike = () => (
     <WizardLayout title="Bike category" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
-      <div className="grid three">
-        <label className="field wide">
-          <span>Bike category</span>
+      <div className="grid two">
+        <label className="field">
+          <span>New bike category</span>
           <select value={state.bikeSelection.category} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateBikeSelection('category', e.target.value as BikeCategory)}>
-            {Object.keys(BIKE_CATEGORY_CONFIG).map((category) => (
-              <option key={category}>{category}</option>
+            {BIKE_CATEGORY_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
-        <Field label="Riding style notes" value={state.bikeSelection.ridingStyleNotes ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateBikeSelection('ridingStyleNotes', e.target.value)} />
+        <div className="card">
+          <h3>Chosen ride context</h3>
+          <p><strong>Ride type:</strong> {state.riderProfile.rideType}</p>
+          <p><strong>Main terrain:</strong> {state.riderProfile.preferredTerrain}</p>
+          <p className="helper">Grouping bike options into road, gravel, MTB, urban, and BMX helps users choose precise categories without guessing the exact label first.</p>
+        </div>
+      </div>
+      <div className="grid one">
+        <Field label="Extra riding style notes (optional)" value={state.bikeSelection.ridingStyleNotes ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateBikeSelection('ridingStyleNotes', e.target.value)} />
       </div>
     </WizardLayout>
   );
@@ -402,13 +563,15 @@ export default function App() {
     ];
 
     return (
-      <WizardLayout title="Results dashboard" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={() => exportFitPdf(state)} nextLabel="Export PDF">
+      <WizardLayout title="Results dashboard" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={() => exportFitPdf(state)} nextLabel="Download PDF">
         <div className="grid two">
           <div className="card">
             <h3>Rider summary</h3>
             <p><strong>Rider:</strong> {state.riderProfile.riderId || 'N/A'}</p>
             <p><strong>Height:</strong> {state.riderProfile.heightCm} cm</p>
-            <p><strong>Goal:</strong> {state.riderProfile.ridingGoal}</p>
+            <p><strong>Fit priority:</strong> {state.riderProfile.ridingGoal}</p>
+            <p><strong>Ride type:</strong> {state.riderProfile.rideType}</p>
+            <p><strong>Main terrain:</strong> {state.riderProfile.preferredTerrain}</p>
             <p><strong>Bike category:</strong> {state.bikeSelection.category}</p>
             <p><strong>Posture bias:</strong> {fit.postureBias}</p>
           </div>
@@ -416,6 +579,17 @@ export default function App() {
             <h3>Professional fitter disclaimer</h3>
             <p>Validate final bike choice and contact points with a professional fitter, especially if you have pain, injuries, asymmetries, or recurring discomfort.</p>
           </div>
+        </div>
+        <div className="card">
+          <h3>Share your ideal bike measurements</h3>
+          <p className="helper">You can download a PDF, open an email draft, send the summary to WhatsApp, or use native device sharing when the browser supports it.</p>
+          <div className="button-row">
+            <button onClick={() => exportFitPdf(state)}>Download PDF</button>
+            <button className="secondary" onClick={handleEmailShare}>Email</button>
+            <button className="secondary" onClick={handleWhatsAppShare}>WhatsApp</button>
+            {webShareSupported && <button className="secondary" onClick={handleWebShare}>Share</button>}
+          </div>
+          {shareStatus && <p className="helper">{shareStatus}</p>}
         </div>
         <div className="results-grid">
           {items.map((item) => (

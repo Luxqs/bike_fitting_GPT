@@ -12,7 +12,8 @@ const defaultState: AppState = {
     flexibilityLevel: 'moderate',
     experienceLevel: 'intermediate',
     ridingGoal: 'balanced',
-    preferredTerrain: '',
+    rideType: 'Endurance / long rides',
+    preferredTerrain: 'Paved road',
     shoeSize: 43,
   },
   manualMeasurements: {},
@@ -40,6 +41,11 @@ function loadInitialState(): AppState {
       riderProfile: {
         ...defaultState.riderProfile,
         ...parsed.riderProfile,
+        rideType: parsed.riderProfile?.rideType || defaultState.riderProfile.rideType,
+        preferredTerrain: parsed.riderProfile?.preferredTerrain || defaultState.riderProfile.preferredTerrain,
+        currentBikeType: parsed.riderProfile?.currentBikeType || undefined,
+        ageRange: parsed.riderProfile?.ageRange || undefined,
+        biologicalSex: parsed.riderProfile?.biologicalSex || undefined,
       },
       manualMeasurements: {
         ...defaultState.manualMeasurements,

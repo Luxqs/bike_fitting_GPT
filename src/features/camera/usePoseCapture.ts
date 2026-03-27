@@ -40,12 +40,36 @@ export function usePoseCapture() {
   const rafRef = useRef<number | null>(null);
   const overlayActiveRef = useRef(false);
   const initializingRef = useRef(false);
+  const liveUpdateRef = useRef(0);
 
   const [isReady, setIsReady] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastConfidence, setLastConfidence] = useState(0);
   const [frames, setFrames] = useState<CapturedFrame[]>([]);
+  const [liveLandmarks, setLiveLandmarks] = useState<LandmarkPoint[]>([]);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null);
+
+  const attachStreamToCurrentVideo = useCallback(async () => {
+    const video = videoRef.current;
+    const stream = streamRef.current;
+
+    if (!video || !stream) {
+      return;
+    }
+
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+
+    if (video.paused || video.readyState < 2) {
+      try {
+        await video.play();
+      } catch {
+        // Autoplay can retry on the next render or user interaction.
+      }
+    }
+  }, []);
 
   const stopOverlayLoop = useCallback(() => {
     overlayActiveRef.current = false;
@@ -59,6 +83,11 @@ export function usePoseCapture() {
     stopOverlayLoop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setLiveLandmarks([]);
+    setFrameSize(null);
     setIsReady(false);
   }, [stopOverlayLoop]);
 
@@ -90,11 +119,7 @@ export function usePoseCapture() {
       });
       streamRef.current = stream;
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
+      await attachStreamToCurrentVideo();
       setIsReady(true);
     } catch (initError) {
       const message = initError instanceof Error ? initError.message : 'Camera initialization failed';
@@ -105,11 +130,15 @@ export function usePoseCapture() {
       initializingRef.current = false;
       setIsInitializing(false);
     }
-  }, [isReady, stop]);
+  }, [attachStreamToCurrentVideo, isReady, stop]);
 
   useEffect(() => {
     return () => stop();
   }, [stop]);
+
+  useEffect(() => {
+    void attachStreamToCurrentVideo();
+  });
 
   const startOverlayLoop = useCallback(() => {
     if (overlayActiveRef.current) {
@@ -137,7 +166,6 @@ export function usePoseCapture() {
         const result = landmarker.detectForVideo(video, performance.now());
         const landmarks = result.landmarks?.[0] ?? [];
         const confidence = averageConfidence(landmarks);
-        setLastConfidence(confidence);
 
         context.lineWidth = 2;
         landmarks.forEach((landmark) => {
@@ -146,6 +174,14 @@ export function usePoseCapture() {
           context.strokeStyle = confidence > 0.6 ? '#22c55e' : '#f59e0b';
           context.stroke();
         });
+
+        const now = performance.now();
+        if (now - liveUpdateRef.current > 120) {
+          setLastConfidence(confidence);
+          setLiveLandmarks(toCanvasLandmarks(landmarks, canvas.width, canvas.height));
+          setFrameSize({ width: canvas.width, height: canvas.height });
+          liveUpdateRef.current = now;
+        }
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -159,14 +195,14 @@ export function usePoseCapture() {
     const landmarker = landmarkerRef.current;
 
     if (!video || !landmarker || video.readyState < 2) {
-      return;
+      return false;
     }
 
     const result = landmarker.detectForVideo(video, performance.now());
     const landmarks = result.landmarks?.[0] ?? [];
     const confidence = averageConfidence(landmarks);
     if (confidence < 0.45) {
-      return;
+      return false;
     }
 
     setFrames((previousFrames) => [
@@ -179,6 +215,8 @@ export function usePoseCapture() {
         confidence,
       },
     ]);
+
+    return true;
   }, []);
 
   return {
@@ -186,6 +224,8 @@ export function usePoseCapture() {
     canvasRef,
     frames,
     setFrames,
+    liveLandmarks,
+    frameSize,
     isReady,
     isInitializing,
     error,
