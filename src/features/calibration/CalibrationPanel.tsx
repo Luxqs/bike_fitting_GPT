@@ -25,6 +25,7 @@ export function CalibrationPanel({ onComplete }: Props) {
   }, [manualReferenceWidthMm, method]);
 
   const canSave = pixelWidth > 0 && referenceWidthMm > 0;
+  const pixelsPerMm = canSave ? pixelWidth / referenceWidthMm : 0;
 
   return (
     <div className="card">
@@ -52,15 +53,24 @@ export function CalibrationPanel({ onComplete }: Props) {
         <span>Measured width in preview pixels</span>
         <input type="number" min={1} value={pixelWidth} onChange={(e: ChangeEvent<HTMLInputElement>) => setPixelWidth(Number(e.target.value))} />
       </label>
-      <p className="helper">Tip: hold the object flat to the camera and keep it near the rider plane to reduce scale error.</p>
+      <div className="card">
+        <h3>Calibration checklist</h3>
+        <ul>
+          <li>Keep the reference object flat to the camera.</li>
+          <li>Hold it near the same depth as the rider, not much closer to the lens.</li>
+          <li>Use the widest visible edge for measurement.</li>
+          <li>Recalibrate if you move the camera closer or farther away.</li>
+        </ul>
+        <p className="helper">Current scale estimate: {pixelsPerMm ? pixelsPerMm.toFixed(2) : '0.00'} px/mm</p>
+      </div>
       <button
         disabled={!canSave}
         onClick={() =>
           onComplete({
             method,
             referenceWidthMm,
-            pixelsPerMm: pixelWidth / referenceWidthMm,
-            confidence: method === 'manual' ? 0.62 : 0.72,
+            pixelsPerMm,
+            confidence: method === 'manual' ? 0.62 : 0.74,
             notes: method === 'manual' ? 'Manual custom-object calibration used.' : 'Manual alignment calibration used.',
           })
         }

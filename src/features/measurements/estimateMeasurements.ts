@@ -1,6 +1,14 @@
 import { CalibrationData, CameraEstimates, CapturedFrame } from '../../types';
 import { avg, clamp, round } from '../../utils/math';
 
+const FRONT_WIDTH_STAGES = new Set(['front-neutral', 'front-tpose']);
+const FRONT_SPAN_STAGES = new Set(['front-tpose', 'front-overhead']);
+const SIDE_LENGTH_STAGES = new Set(['side-neutral', 'side-knee-lifts', 'side-pedal']);
+const SIDE_FOOT_STAGES = new Set(['side-neutral', 'side-seated']);
+const FLEX_SQUAT_STAGES = new Set(['side-squat']);
+const FLEX_HINGE_STAGES = new Set(['side-hinge']);
+const VISIBILITY_THRESHOLD = 0.35;
+
 const dist = (a?: { x: number; y: number }, b?: { x: number; y: number }) => {
   if (!a || !b) return undefined;
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -15,8 +23,28 @@ const averageOrUndefined = (values: Array<number | undefined>) => {
   return filtered.length ? avg(filtered) : undefined;
 };
 
+const medianOrUndefined = (values: Array<number | undefined>) => {
+  const filtered = values
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+
+  if (!filtered.length) {
+    return undefined;
+  }
+
+  const middle = Math.floor(filtered.length / 2);
+  return filtered.length % 2 === 0
+    ? (filtered[middle - 1] + filtered[middle]) / 2
+    : filtered[middle];
+};
+
+const maxOrUndefined = (values: Array<number | undefined>) => {
+  const filtered = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
+  return filtered.length ? Math.max(...filtered) : undefined;
+};
+
 function getBodyHeightPixels(frame: CapturedFrame): number | undefined {
-  const visibleLandmarks = frame.landmarks.filter((point) => (point.visibility ?? 0.5) >= 0.35);
+  const visibleLandmarks = frame.landmarks.filter((point) => (point.visibility ?? 0.5) >= VISIBILITY_THRESHOLD);
   if (visibleLandmarks.length < 10) {
     return undefined;
   }
@@ -66,70 +94,133 @@ function mmFromPixels(px: number | undefined, pixelsPerMm?: number) {
   return px / pixelsPerMm;
 }
 
+function selectFrames(frames: CapturedFrame[], stages: Set<string>) {
+  return frames.filter((frame) => stages.has(frame.stageId));
+}
+
+function measurementConfidence(baseConfidence: number, supportingFrames: number, calibrationMode: 'reference-object' | 'height-reference' | 'height-corrected' | 'unavailable') {
+  const frameBonus = Math.min(supportingFrames, 3) * 0.05;
+  const calibrationPenalty =
+    calibrationMode === 'reference-object'
+      ? 0
+      : calibrationMode === 'height-corrected'
+        ? 0.08
+        : calibrationMode === 'height-reference'
+          ? 0.12
+          : 0.2;
+
+  return clamp(baseConfidence + frameBonus - calibrationPenalty, 0.25, 0.95);
+}
+
 export function estimateMeasurementsFromFrames(frames: CapturedFrame[], calibration: CalibrationData | undefined, riderHeightCm: number): CameraEstimates {
-  const usable = frames.filter((f) => f.confidence >= 0.45 && f.landmarks.length > 20);
-  const front = usable.filter((f) => f.view === 'front');
-  const side = usable.filter((f) => f.view === 'side');
-  const { pixelsPerMm } = resolvePixelsPerMillimeter(usable, calibration, riderHeightCm);
+  const usable = frames.filter((frame) => frame.confidence >= 0.45 && frame.landmarks.length > 20);
+  const front = usable.filter((frame) => frame.view === 'front');
+  const side = usable.filter((frame) => frame.view === 'side');
 
-  const shoulderWidths = front.map((f) => mmFromPixels(dist(landmark(f, 11), landmark(f, 12)), pixelsPerMm));
-  const hipWidths = front.map((f) => mmFromPixels(dist(landmark(f, 23), landmark(f, 24)), pixelsPerMm));
-  const armSpans = front.map((f) => mmFromPixels(dist(landmark(f, 15), landmark(f, 16)), pixelsPerMm));
+  const frontWidths = selectFrames(front, FRONT_WIDTH_STAGES);
+  const frontSpans = selectFrames(front, FRONT_SPAN_STAGES);
+  const sideLengths = selectFrames(side, SIDE_LENGTH_STAGES);
+  const sideFeet = selectFrames(side, SIDE_FOOT_STAGES);
+  const sideSquat = selectFrames(side, FLEX_SQUAT_STAGES);
+  const sideHinge = selectFrames(side, FLEX_HINGE_STAGES);
 
-  const inseams = side.map((f) => {
-    const hip = landmark(f, 24) ?? landmark(f, 23);
-    const ankle = landmark(f, 28) ?? landmark(f, 27);
+  const { pixelsPerMm, calibrationMode } = resolvePixelsPerMillimeter(usable, calibration, riderHeightCm);
+
+  const shoulderWidths = frontWidths.map((frame) => mmFromPixels(dist(landmark(frame, 11), landmark(frame, 12)), pixelsPerMm));
+  const hipWidths = frontWidths.map((frame) => mmFromPixels(dist(landmark(frame, 23), landmark(frame, 24)), pixelsPerMm));
+  const armSpans = frontSpans.map((frame) => mmFromPixels(dist(landmark(frame, 15), landmark(frame, 16)), pixelsPerMm));
+
+  const inseams = sideLengths.map((frame) => {
+    const hip = landmark(frame, 24) ?? landmark(frame, 23);
+    const ankle = landmark(frame, 28) ?? landmark(frame, 27);
     return mmFromPixels(dist(hip, ankle), pixelsPerMm);
   });
 
-  const femurs = side.map((f) => mmFromPixels(dist(landmark(f, 24) ?? landmark(f, 23), landmark(f, 26) ?? landmark(f, 25)), pixelsPerMm));
-  const tibias = side.map((f) => mmFromPixels(dist(landmark(f, 26) ?? landmark(f, 25), landmark(f, 28) ?? landmark(f, 27)), pixelsPerMm));
-  const torsos = side.map((f) => mmFromPixels(dist(landmark(f, 12) ?? landmark(f, 11), landmark(f, 24) ?? landmark(f, 23)), pixelsPerMm));
-  const upperArms = front.map((f) => mmFromPixels(dist(landmark(f, 12) ?? landmark(f, 11), landmark(f, 14) ?? landmark(f, 13)), pixelsPerMm));
-  const forearms = front.map((f) => mmFromPixels(dist(landmark(f, 14) ?? landmark(f, 13), landmark(f, 16) ?? landmark(f, 15)), pixelsPerMm));
-  const feet = side.map((f) => mmFromPixels(dist(landmark(f, 29), landmark(f, 31)) ?? dist(landmark(f, 30), landmark(f, 32)), pixelsPerMm));
+  const femurs = sideLengths.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 24) ?? landmark(frame, 23), landmark(frame, 26) ?? landmark(frame, 25)), pixelsPerMm),
+  );
+  const tibias = sideLengths.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 26) ?? landmark(frame, 25), landmark(frame, 28) ?? landmark(frame, 27)), pixelsPerMm),
+  );
+  const torsos = sideLengths.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 12) ?? landmark(frame, 11), landmark(frame, 24) ?? landmark(frame, 23)), pixelsPerMm),
+  );
+  const upperArms = frontWidths.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 12) ?? landmark(frame, 11), landmark(frame, 14) ?? landmark(frame, 13)), pixelsPerMm),
+  );
+  const forearms = frontWidths.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 14) ?? landmark(frame, 13), landmark(frame, 16) ?? landmark(frame, 15)), pixelsPerMm),
+  );
+  const feet = sideFeet.map((frame) =>
+    mmFromPixels(dist(landmark(frame, 29), landmark(frame, 31)) ?? dist(landmark(frame, 30), landmark(frame, 32)), pixelsPerMm),
+  );
 
-  const squatAngles = side.map((f) => {
-    const hip = landmark(f, 24) ?? landmark(f, 23);
-    const knee = landmark(f, 26) ?? landmark(f, 25);
-    const ankle = landmark(f, 28) ?? landmark(f, 27);
+  const squatAngles = sideSquat.map((frame) => {
+    const hip = landmark(frame, 24) ?? landmark(frame, 23);
+    const knee = landmark(frame, 26) ?? landmark(frame, 25);
+    const ankle = landmark(frame, 28) ?? landmark(frame, 27);
     if (!hip || !knee || !ankle) return undefined;
     const a = Math.atan2(hip.y - knee.y, hip.x - knee.x);
     const b = Math.atan2(ankle.y - knee.y, ankle.x - knee.x);
-    return Math.abs((a - b) * 180 / Math.PI);
+    const angle = Math.abs(((a - b) * 180) / Math.PI);
+    return angle > 180 ? 360 - angle : angle;
   });
 
-  const asymmetry = front.length
-    ? avg(front.map((f) => {
-        const left = dist(landmark(f, 11), landmark(f, 15)) ?? 0;
-        const right = dist(landmark(f, 12), landmark(f, 16)) ?? 0;
+  const hingeScores = sideHinge.map((frame) => {
+    const shoulder = landmark(frame, 12) ?? landmark(frame, 11);
+    const hip = landmark(frame, 24) ?? landmark(frame, 23);
+    const bodyHeightPx = getBodyHeightPixels(frame);
+    if (!shoulder || !hip || !bodyHeightPx) return undefined;
+
+    return clamp((Math.abs(shoulder.x - hip.x) / bodyHeightPx - 0.05) / 0.18, 0.2, 0.9);
+  });
+
+  const squatScores = squatAngles.map((angle) => {
+    if (!angle) return undefined;
+    return clamp((155 - angle) / 70, 0.2, 0.9);
+  });
+
+  const frontStatic = selectFrames(front, FRONT_WIDTH_STAGES);
+  const asymmetry = frontStatic.length
+    ? avg(frontStatic.map((frame) => {
+        const left = dist(landmark(frame, 11), landmark(frame, 15)) ?? 0;
+        const right = dist(landmark(frame, 12), landmark(frame, 16)) ?? 0;
         return left && right ? Math.abs(left - right) / Math.max(left, right) : 0;
       }))
     : 0;
 
-  const confidenceBase = clamp(avg(usable.map((f) => f.confidence)), 0.3, 0.95);
-  const sideConfidence = side.length ? confidenceBase : 0.25;
+  const confidenceBase = clamp(avg(usable.map((frame) => frame.confidence)), 0.3, 0.95);
+  const frontMetricConfidence = measurementConfidence(confidenceBase, frontWidths.length, calibrationMode);
+  const armMetricConfidence = measurementConfidence(confidenceBase, frontSpans.length, calibrationMode);
+  const sideMetricConfidence = measurementConfidence(confidenceBase, sideLengths.length, calibrationMode);
+  const flexibilityConfidence = measurementConfidence(confidenceBase * 0.85, sideSquat.length + sideHinge.length, calibrationMode);
 
   return {
-    inseamCm: maybeNumber(round((averageOrUndefined(inseams) ?? 0) / 10, 1)),
-    femurLengthCm: maybeNumber(round((averageOrUndefined(femurs) ?? 0) / 10, 1)),
-    tibiaLengthCm: maybeNumber(round((averageOrUndefined(tibias) ?? 0) / 10, 1)),
-    torsoLengthCm: maybeNumber(round((averageOrUndefined(torsos) ?? 0) / 10, 1)),
-    upperArmLengthCm: maybeNumber(round((averageOrUndefined(upperArms) ?? 0) / 10, 1)),
-    forearmLengthCm: maybeNumber(round((averageOrUndefined(forearms) ?? 0) / 10, 1)),
-    shoulderWidthCm: maybeNumber(round((averageOrUndefined(shoulderWidths) ?? 0) / 10, 1)),
-    hipWidthCm: maybeNumber(round((averageOrUndefined(hipWidths) ?? 0) / 10, 1)),
-    armSpanCm: maybeNumber(round((averageOrUndefined(armSpans) ?? 0) / 10, 1)),
-    footLengthCm: maybeNumber(round((averageOrUndefined(feet) ?? 0) / 10, 1)),
+    inseamCm: maybeNumber(round((maxOrUndefined(inseams) ?? 0) / 10, 1)),
+    femurLengthCm: maybeNumber(round((maxOrUndefined(femurs) ?? 0) / 10, 1)),
+    tibiaLengthCm: maybeNumber(round((maxOrUndefined(tibias) ?? 0) / 10, 1)),
+    torsoLengthCm: maybeNumber(round((maxOrUndefined(torsos) ?? 0) / 10, 1)),
+    upperArmLengthCm: maybeNumber(round((maxOrUndefined(upperArms) ?? 0) / 10, 1)),
+    forearmLengthCm: maybeNumber(round((maxOrUndefined(forearms) ?? 0) / 10, 1)),
+    shoulderWidthCm: maybeNumber(round((medianOrUndefined(shoulderWidths) ?? 0) / 10, 1)),
+    hipWidthCm: maybeNumber(round((medianOrUndefined(hipWidths) ?? 0) / 10, 1)),
+    armSpanCm: maybeNumber(round((maxOrUndefined(armSpans) ?? 0) / 10, 1)),
+    footLengthCm: maybeNumber(round((maxOrUndefined(feet) ?? 0) / 10, 1)),
     postureScore: round(confidenceBase, 2),
-    flexibilityProxy: round(clamp((180 - (averageOrUndefined(squatAngles) ?? 120)) / 120, 0.2, 0.9), 2),
+    flexibilityProxy: maybeNumber(round(averageOrUndefined([...squatScores, ...hingeScores]) ?? 0, 2)),
     asymmetryScore: round(clamp(asymmetry, 0, 1), 2),
     confidenceByMetric: {
-      inseamCm: sideConfidence,
-      torsoLengthCm: sideConfidence,
-      shoulderWidthCm: confidenceBase,
-      armSpanCm: confidenceBase * 0.9,
-      flexibilityProxy: side.length ? confidenceBase * 0.8 : 0.3,
+      inseamCm: sideMetricConfidence,
+      femurLengthCm: sideMetricConfidence,
+      tibiaLengthCm: sideMetricConfidence,
+      torsoLengthCm: sideMetricConfidence,
+      shoulderWidthCm: frontMetricConfidence,
+      hipWidthCm: frontMetricConfidence,
+      upperArmLengthCm: frontMetricConfidence,
+      forearmLengthCm: frontMetricConfidence,
+      armSpanCm: armMetricConfidence,
+      footLengthCm: measurementConfidence(confidenceBase * 0.8, sideFeet.length, calibrationMode),
+      flexibilityProxy: flexibilityConfidence,
     },
   };
 }

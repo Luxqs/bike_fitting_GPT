@@ -1,18 +1,12 @@
 import jsPDF from 'jspdf';
-import { AppState } from '../../types';
+import { AppState, FitRecommendationItem } from '../../types';
 
-export function exportFitPdf(state: AppState) {
-  if (!state.fitResult) return;
-  const doc = new jsPDF();
-  let y = 14;
-  doc.setFontSize(18);
-  doc.text('BikeFit Camera Summary', 14, y);
-  y += 10;
-  doc.setFontSize(11);
-  doc.text(`Rider: ${state.riderProfile.riderId || 'N/A'}`, 14, y); y += 6;
-  doc.text(`Bike category: ${state.bikeSelection.category}`, 14, y); y += 8;
-  doc.text('Recommendations', 14, y); y += 6;
-  const items = [
+function getRecommendationItems(state: AppState): FitRecommendationItem[] {
+  if (!state.fitResult) {
+    return [];
+  }
+
+  return [
     state.fitResult.frameSize,
     state.fitResult.effectiveTopTube,
     state.fitResult.stack,
@@ -25,11 +19,85 @@ export function exportFitPdf(state: AppState) {
     state.fitResult.crankLength,
     ...(state.fitResult.seatpostSuggestion ? [state.fitResult.seatpostSuggestion] : []),
   ];
-  items.forEach((item) => {
-    doc.text(`${item.label}: ${item.preferred} (${item.range})`, 14, y);
-    y += 6;
+}
+
+export function exportFitPdf(state: AppState) {
+  if (!state.fitResult) return;
+
+  const doc = new jsPDF();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 14;
+  const maxWidth = pageWidth - marginX * 2;
+  let y = 14;
+
+  const ensureSpace = (requiredHeight: number) => {
+    if (y + requiredHeight <= pageHeight - 16) {
+      return;
+    }
+    doc.addPage();
+    y = 16;
+  };
+
+  const addSectionTitle = (title: string) => {
+    ensureSpace(10);
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text(title, marginX, y);
+    y += 7;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+  };
+
+  const addParagraph = (text: string) => {
+    const lines = doc.splitTextToSize(text, maxWidth);
+    ensureSpace(lines.length * 5 + 2);
+    doc.text(lines, marginX, y);
+    y += lines.length * 5 + 2;
+  };
+
+  const addBulletList = (items: string[]) => {
+    items.forEach((item) => addParagraph(`• ${item}`));
+  };
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text('BikeFit Camera Summary', marginX, y);
+  y += 9;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  addParagraph(`Rider: ${state.riderProfile.riderId || 'N/A'}`);
+  addParagraph(`Bike category: ${state.bikeSelection.category}`);
+  addParagraph(`Ride type: ${state.riderProfile.rideType}`);
+  addParagraph(`Terrain: ${state.riderProfile.preferredTerrain}`);
+  addParagraph(`Posture bias: ${state.fitResult.postureBias}`);
+
+  addSectionTitle('Recommended dimensions');
+  getRecommendationItems(state).forEach((item) => {
+    addParagraph(`${item.label}: ${item.preferred} (range ${item.range}, confidence ${Math.round(item.confidence * 100)}%)`);
   });
-  y += 4;
-  doc.text('Disclaimer: This is an estimation tool and should be validated by a professional fitter.', 14, y, { maxWidth: 180 });
+
+  addSectionTitle('Measurement summary');
+  state.fitResult.derivedMeasurements.forEach((measurement) => {
+    addParagraph(
+      `${measurement.label}: ${measurement.value}${measurement.unit ? ` ${measurement.unit}` : ''} · source: ${measurement.source} · confidence ${Math.round(measurement.confidence * 100)}%`,
+    );
+  });
+
+  addSectionTitle('Why these values were recommended');
+  getRecommendationItems(state).forEach((item) => {
+    addParagraph(`${item.label}: ${item.explanation}`);
+  });
+
+  addSectionTitle('Assumptions');
+  addBulletList(state.fitResult.assumptions);
+
+  addSectionTitle('Warnings');
+  addBulletList([
+    ...state.fitResult.warnings,
+    'Validate final bike choice and contact points with a professional fitter, especially if you have pain, injuries, asymmetries, or recurring discomfort.',
+  ]);
+
   doc.save('bikefit-camera-summary.pdf');
 }

@@ -15,6 +15,7 @@ const MODEL_ASSET_PATH =
 const VISION_WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const LIVE_UPDATE_INTERVAL_MS = 120;
 const VISIBILITY_THRESHOLD = 0.35;
+const LANDMARK_HISTORY_SIZE = 5;
 
 const SKELETON_CONNECTIONS: Array<[number, number]> = [
   [11, 12],
@@ -50,7 +51,7 @@ function toCanvasLandmarks(landmarks: PoseResultLandmark[], width: number, heigh
   }));
 }
 
-function averageConfidence(landmarks: PoseResultLandmark[]): number {
+function averageConfidence(landmarks: Array<PoseResultLandmark | LandmarkPoint>): number {
   if (!landmarks.length) {
     return 0;
   }
@@ -60,6 +61,39 @@ function averageConfidence(landmarks: PoseResultLandmark[]): number {
 
 function isVisible(point?: LandmarkPoint) {
   return (point?.visibility ?? 0) >= VISIBILITY_THRESHOLD;
+}
+
+function pushLandmarkHistory(history: LandmarkPoint[][], landmarks: LandmarkPoint[]) {
+  history.push(landmarks);
+  while (history.length > LANDMARK_HISTORY_SIZE) {
+    history.shift();
+  }
+}
+
+function smoothLandmarks(history: LandmarkPoint[][]): LandmarkPoint[] {
+  const latest = history[history.length - 1];
+  if (!latest?.length) {
+    return [];
+  }
+
+  return latest.map((_, index) => {
+    const points = history.map((frame) => frame[index]).filter((point): point is LandmarkPoint => Boolean(point));
+    if (!points.length) {
+      return latest[index];
+    }
+
+    const weightSum = points.reduce((sum, point) => sum + Math.max(point.visibility ?? 0.1, 0.1), 0);
+    const weightedAverage = (selector: (point: LandmarkPoint) => number | undefined) =>
+      points.reduce((sum, point) => sum + (selector(point) ?? 0) * Math.max(point.visibility ?? 0.1, 0.1), 0) / weightSum;
+
+    return {
+      x: weightedAverage((point) => point.x),
+      y: weightedAverage((point) => point.y),
+      z: weightedAverage((point) => point.z),
+      visibility: weightedAverage((point) => point.visibility),
+      presence: weightedAverage((point) => point.presence),
+    };
+  });
 }
 
 function drawTorso(context: CanvasRenderingContext2D, landmarks: LandmarkPoint[]) {
@@ -155,6 +189,30 @@ function drawLabels(context: CanvasRenderingContext2D, landmarks: LandmarkPoint[
   context.restore();
 }
 
+async function createPoseLandmarker() {
+  const vision = await FilesetResolver.forVisionTasks(VISION_WASM_PATH);
+  const delegates: Array<'GPU' | 'CPU'> = ['GPU', 'CPU'];
+
+  let lastError: unknown;
+
+  for (const delegate of delegates) {
+    try {
+      return await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: MODEL_ASSET_PATH,
+          delegate,
+        },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error('Could not initialize the pose landmarker.');
+}
+
 export function usePoseCapture() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -164,6 +222,7 @@ export function usePoseCapture() {
   const overlayActiveRef = useRef(false);
   const initializingRef = useRef(false);
   const liveUpdateRef = useRef(0);
+  const landmarkHistoryRef = useRef<LandmarkPoint[][]>([]);
 
   const [isReady, setIsReady] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
@@ -189,7 +248,7 @@ export function usePoseCapture() {
       try {
         await video.play();
       } catch {
-        // Autoplay can retry on the next render or user interaction.
+        // Autoplay can retry on the next render or after user interaction.
       }
     }
   }, []);
@@ -206,17 +265,32 @@ export function usePoseCapture() {
     stopOverlayLoop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+
+    landmarkHistoryRef.current = [];
     setLiveLandmarks([]);
     setFrameSize(null);
+    setLastConfidence(0);
     setIsReady(false);
   }, [stopOverlayLoop]);
+
+  const destroyDetector = useCallback(() => {
+    landmarkerRef.current?.close?.();
+    landmarkerRef.current = null;
+  }, []);
 
   const init = useCallback(async () => {
     if (initializingRef.current || isReady) {
       return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const unsupportedMessage = 'This browser does not support camera access.';
+      setError(unsupportedMessage);
+      throw new Error(unsupportedMessage);
     }
 
     try {
@@ -224,44 +298,43 @@ export function usePoseCapture() {
       setIsInitializing(true);
       setError(null);
 
-      const vision = await FilesetResolver.forVisionTasks(VISION_WASM_PATH);
-      landmarkerRef.current = await PoseLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: MODEL_ASSET_PATH,
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numPoses: 1,
-      });
+      destroyDetector();
+      landmarkerRef.current = await createPoseLandmarker();
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: 'user',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       });
-      streamRef.current = stream;
 
+      streamRef.current = stream;
       await attachStreamToCurrentVideo();
       setIsReady(true);
     } catch (initError) {
       const message = initError instanceof Error ? initError.message : 'Camera initialization failed';
       setError(message);
       stop();
+      destroyDetector();
       throw initError;
     } finally {
       initializingRef.current = false;
       setIsInitializing(false);
     }
-  }, [attachStreamToCurrentVideo, isReady, stop]);
+  }, [attachStreamToCurrentVideo, destroyDetector, isReady, stop]);
 
   useEffect(() => {
-    return () => stop();
-  }, [stop]);
+    return () => {
+      stop();
+      destroyDetector();
+    };
+  }, [destroyDetector, stop]);
 
   useEffect(() => {
     void attachStreamToCurrentVideo();
-  });
+  }, [attachStreamToCurrentVideo]);
 
   const startOverlayLoop = useCallback(() => {
     if (overlayActiveRef.current) {
@@ -288,17 +361,25 @@ export function usePoseCapture() {
 
         const result = landmarker.detectForVideo(video, performance.now());
         const normalizedLandmarks = result.landmarks?.[0] ?? [];
-        const confidence = averageConfidence(normalizedLandmarks);
-        const landmarks = toCanvasLandmarks(normalizedLandmarks, canvas.width, canvas.height);
+        const rawLandmarks = toCanvasLandmarks(normalizedLandmarks, canvas.width, canvas.height);
 
-        drawBoundingBox(context, landmarks);
-        drawSkeleton(context, landmarks, confidence);
-        drawLabels(context, landmarks);
+        if (rawLandmarks.length) {
+          pushLandmarkHistory(landmarkHistoryRef.current, rawLandmarks);
+        }
+
+        const smoothedLandmarks = landmarkHistoryRef.current.length
+          ? smoothLandmarks(landmarkHistoryRef.current)
+          : rawLandmarks;
+        const confidence = averageConfidence(smoothedLandmarks);
+
+        drawBoundingBox(context, smoothedLandmarks);
+        drawSkeleton(context, smoothedLandmarks, confidence);
+        drawLabels(context, smoothedLandmarks);
 
         const now = performance.now();
         if (now - liveUpdateRef.current > LIVE_UPDATE_INTERVAL_MS) {
           setLastConfidence(confidence);
-          setLiveLandmarks(landmarks);
+          setLiveLandmarks(smoothedLandmarks);
           setFrameSize({ width: canvas.width, height: canvas.height });
           liveUpdateRef.current = now;
         }
@@ -319,8 +400,16 @@ export function usePoseCapture() {
     }
 
     const result = landmarker.detectForVideo(video, performance.now());
-    const landmarks = result.landmarks?.[0] ?? [];
-    const confidence = averageConfidence(landmarks);
+    const normalizedLandmarks = result.landmarks?.[0] ?? [];
+    if (!normalizedLandmarks.length) {
+      return false;
+    }
+
+    const rawLandmarks = toCanvasLandmarks(normalizedLandmarks, video.videoWidth, video.videoHeight);
+    pushLandmarkHistory(landmarkHistoryRef.current, rawLandmarks);
+    const smoothedLandmarks = smoothLandmarks(landmarkHistoryRef.current);
+    const confidence = averageConfidence(smoothedLandmarks);
+
     if (confidence < 0.45) {
       return false;
     }
@@ -331,7 +420,7 @@ export function usePoseCapture() {
         timestamp: Date.now(),
         view,
         stageId,
-        landmarks: toCanvasLandmarks(landmarks, video.videoWidth, video.videoHeight),
+        landmarks: smoothedLandmarks,
         confidence,
       },
     ]);
