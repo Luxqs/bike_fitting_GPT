@@ -2,10 +2,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Field } from './components/Field';
 import { WizardLayout } from './components/WizardLayout';
 import {
-  AGE_RANGE_OPTIONS,
   BIKE_CATEGORY_GROUPS,
-  BIOLOGICAL_SEX_OPTIONS,
-  CURRENT_BIKE_TYPE_OPTIONS,
   RIDE_TYPE_OPTIONS,
   TERRAIN_OPTIONS,
 } from './config/dropdownOptions';
@@ -19,7 +16,7 @@ import { estimateMeasurementsFromFrames } from './features/measurements/estimate
 import { exportFitPdf } from './features/results/exportPdf';
 import { buildMailtoUrl, buildWhatsAppUrl, shareViaWebShare } from './features/results/shareFit';
 import { useAppState } from './hooks/useAppState';
-import { AppState, BikeCategory, ExperienceLevel, FlexibilityLevel, LandmarkPoint, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
+import { AppState, BikeCategory, FlexibilityLevel, LandmarkPoint, PAIN_OPTIONS, PainPoint, RidingGoal } from './types';
 import './styles.css';
 
 const MIN_CAPTURED_FRAMES = 5;
@@ -70,7 +67,9 @@ export default function App() {
   const [capturePaused, setCapturePaused] = useState(false);
   const [holdProgressMs, setHoldProgressMs] = useState(0);
   const [shareStatus, setShareStatus] = useState<string>('');
+  const [captureFeedback, setCaptureFeedback] = useState('Move into the requested pose. The app captures automatically once your full body is tracked.');
   const timerRef = useRef<number | null>(null);
+  const previousCapturedCount = useRef(0);
 
   const updateAppState = (updater: (prev: AppState) => AppState) => {
     setState(updater);
@@ -167,6 +166,10 @@ export default function App() {
     () => TRACKED_PARTS.map((part) => ({ ...part, visible: isPointVisible(camera.liveLandmarks, camera.frameSize, part.index) })),
     [camera.frameSize, camera.liveLandmarks],
   );
+  const missingTrackedParts = useMemo(
+    () => trackedPartsStatus.filter((part) => !part.visible).map((part) => part.label),
+    [trackedPartsStatus],
+  );
 
   const captureCoverage = useMemo(() => {
     const capturedStageIds = new Set(camera.frames.map((frame) => frame.stageId));
@@ -187,6 +190,26 @@ export default function App() {
         requiredMissing.length === 0,
     };
   }, [camera.frames]);
+
+  useEffect(() => {
+    if (state.step !== 'capture') {
+      return;
+    }
+
+    if (camera.frames.length > previousCapturedCount.current) {
+      setCaptureFeedback(`✅ Measurements taken for "${currentStage.title}". Keep following the next pose.`);
+    } else if (!stageReadiness.ready) {
+      setCaptureFeedback(
+        missingTrackedParts.length
+          ? `⚠️ Adjust your position. Missing body parts in frame: ${missingTrackedParts.join(', ')}.`
+          : '⚠️ Position not ready. Follow the live guidance until all checks are green.',
+      );
+    } else {
+      setCaptureFeedback('✅ Good position detected. Hold still while measurements are captured.');
+    }
+
+    previousCapturedCount.current = camera.frames.length;
+  }, [camera.frames.length, currentStage.title, missingTrackedParts, stageReadiness.ready, state.step]);
 
   useEffect(() => {
     if (state.step !== 'capture' || capturePaused) {
@@ -365,66 +388,14 @@ export default function App() {
 
   const renderProfile = () => (
     <WizardLayout title="Rider profile" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
-      <div className="grid four">
-        <Field label="Name or rider ID" value={state.riderProfile.riderId} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('riderId', e.target.value)} />
-        <label className="field">
-          <span>Age range (optional)</span>
-          <select
-            value={state.riderProfile.ageRange ?? ''}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('ageRange', e.target.value ? (e.target.value as AppState['riderProfile']['ageRange']) : undefined)}
-          >
-            <option value="">Not provided</option>
-            {AGE_RANGE_OPTIONS.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Biological sex (optional)</span>
-          <select
-            value={state.riderProfile.biologicalSex ?? ''}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('biologicalSex', e.target.value ? (e.target.value as AppState['riderProfile']['biologicalSex']) : undefined)}
-          >
-            <option value="">Not provided</option>
-            {BIOLOGICAL_SEX_OPTIONS.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Current bike type (optional)</span>
-          <select
-            value={state.riderProfile.currentBikeType ?? ''}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('currentBikeType', e.target.value ? (e.target.value as AppState['riderProfile']['currentBikeType']) : undefined)}
-          >
-            <option value="">Not provided</option>
-            {CURRENT_BIKE_TYPE_OPTIONS.map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <div className="grid four">
+      <div className="grid three">
         <Field label="Height (cm)" type="number" value={state.riderProfile.heightCm} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('heightCm', Number(e.target.value))} />
-        <Field label="Weight (kg)" type="number" value={state.riderProfile.weightKg} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('weightKg', Number(e.target.value))} />
-        <Field label="Shoe size" type="number" value={state.riderProfile.shoeSize} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('shoeSize', Number(e.target.value))} />
-        <Field label="Current frame size (optional)" value={state.riderProfile.frameSize ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateRiderProfile('frameSize', e.target.value)} />
-      </div>
-      <div className="grid four">
         <label className="field">
           <span>Flexibility</span>
           <select value={state.riderProfile.flexibilityLevel} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('flexibilityLevel', e.target.value as FlexibilityLevel)}>
             <option value="low">Low</option>
             <option value="moderate">Moderate</option>
             <option value="high">High</option>
-          </select>
-        </label>
-        <label className="field">
-          <span>Experience</span>
-          <select value={state.riderProfile.experienceLevel} onChange={(e: ChangeEvent<HTMLSelectElement>) => updateRiderProfile('experienceLevel', e.target.value as ExperienceLevel)}>
-            <option value="beginner">Beginner</option>
-            <option value="intermediate">Intermediate</option>
-            <option value="advanced">Advanced</option>
           </select>
         </label>
         <label className="field">
@@ -455,8 +426,8 @@ export default function App() {
           </select>
         </label>
         <div className="card">
-          <h3>Why dropdowns?</h3>
-          <p className="helper">Structured dropdown choices make the fit engine use more precise and repeatable inputs than open free-text guesses.</p>
+          <h3>Only required data</h3>
+          <p className="helper">This screen now asks only inputs used directly by the fit engine. All questions are fixed options or numeric values.</p>
         </div>
       </div>
     </WizardLayout>
@@ -548,6 +519,7 @@ export default function App() {
             ))}
           </div>
           <p className="helper">{stageReadiness.hint}</p>
+          <p className={`helper ${stageReadiness.ready ? 'success' : ''}`}>{captureFeedback}</p>
           <div className="checklist">
             {stageReadiness.checks.map((check) => (
               <div key={check.label} className={`checklist-item ${check.passed ? 'good' : 'bad'}`}>
@@ -557,6 +529,19 @@ export default function App() {
             ))}
           </div>
           <p>Captured frames: <strong>{camera.frames.length}</strong> · Front: <strong>{captureCoverage.frontCount}</strong> · Side: <strong>{captureCoverage.sideCount}</strong></p>
+          {camera.frames.length > 0 && (
+            <>
+              <h4>Captured proof images</h4>
+              <div className="capture-thumbs">
+                {camera.frames.slice(-4).map((frame) => (
+                  <div key={`${frame.stageId}-${frame.timestamp}`} className="capture-thumb">
+                    {frame.imageDataUrl && <img src={frame.imageDataUrl} alt={`${frame.stageId} captured`} />}
+                    <span>{frame.stageId}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <p>Auto-capture hold: <strong>{Math.round(holdProgressRatio * 100)}%</strong></p>
           <div className="progress-bar hold-progress"><span style={{ width: `${holdProgressRatio * 100}%` }} /></div>
           {!captureCoverage.ready && (
@@ -616,9 +601,6 @@ export default function App() {
           <p className="helper">Grouping bike options into road, gravel, MTB, urban, and BMX helps users choose precise categories without guessing the exact label first.</p>
         </div>
       </div>
-      <div className="grid one">
-        <Field label="Extra riding style notes (optional)" value={state.bikeSelection.ridingStyleNotes ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateBikeSelection('ridingStyleNotes', e.target.value)} />
-      </div>
     </WizardLayout>
   );
 
@@ -632,14 +614,6 @@ export default function App() {
           </label>
         ))}
       </div>
-      <label className="field">
-        <span>Free text notes</span>
-        <textarea value={state.issues.freeText ?? ''} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateAppState((previous) => ({ ...previous, issues: { ...previous.issues, freeText: e.target.value } }))} />
-      </label>
-      <label className="field">
-        <span>Injury / limitation notes</span>
-        <textarea value={state.riderProfile.injuryNotes ?? ''} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateRiderProfile('injuryNotes', e.target.value)} />
-      </label>
     </WizardLayout>
   );
 
@@ -665,7 +639,6 @@ export default function App() {
         <div className="grid two">
           <div className="card">
             <h3>Rider summary</h3>
-            <p><strong>Rider:</strong> {state.riderProfile.riderId || 'N/A'}</p>
             <p><strong>Height:</strong> {state.riderProfile.heightCm} cm</p>
             <p><strong>Fit priority:</strong> {state.riderProfile.ridingGoal}</p>
             <p><strong>Ride type:</strong> {state.riderProfile.rideType}</p>

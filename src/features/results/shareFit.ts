@@ -25,9 +25,8 @@ export function buildFitShareText(state: AppState): string {
     return 'BikeFit Camera summary is not available yet.';
   }
 
-  const riderName = state.riderProfile.riderId || 'Rider';
   const lines = [
-    `BikeFit Camera summary for ${riderName}`,
+    'BikeFit Camera summary',
     `Bike category: ${state.bikeSelection.category}`,
     `Ride type: ${state.riderProfile.rideType}`,
     `Terrain: ${state.riderProfile.preferredTerrain}`,
@@ -45,8 +44,7 @@ export function buildFitShareText(state: AppState): string {
 }
 
 export function buildMailtoUrl(state: AppState): string {
-  const riderName = state.riderProfile.riderId || 'Rider';
-  const subject = `BikeFit Camera fit summary - ${riderName}`;
+  const subject = 'BikeFit Camera fit summary';
   const body = buildFitShareText(state);
   return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }

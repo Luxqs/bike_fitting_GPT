@@ -75,26 +75,11 @@ export type PainPoint =
   | 'No issues, just sizing a new bike';
 
 export interface RiderProfile {
-  riderId: string;
-  ageRange?: AgeRange;
-  biologicalSex?: BiologicalSexOption;
   heightCm: number;
-  weightKg: number;
   flexibilityLevel: FlexibilityLevel;
-  experienceLevel: ExperienceLevel;
   ridingGoal: RidingGoal;
   rideType: RideType;
   preferredTerrain: TerrainOption;
-  shoeSize: number;
-  currentBikeType?: CurrentBikeType;
-  frameSize?: string;
-  stemLengthMm?: number;
-  handlebarWidthMm?: number;
-  crankLengthMm?: number;
-  saddleHeightMm?: number;
-  reachMm?: number;
-  dropMm?: number;
-  injuryNotes?: string;
 }
 
 export interface ManualMeasurements {
@@ -126,6 +111,7 @@ export interface CapturedFrame {
   stageId: string;
   landmarks: LandmarkPoint[];
   confidence: number;
+  imageDataUrl?: string;
 }
 
 export interface CameraEstimates {
@@ -147,12 +133,10 @@ export interface CameraEstimates {
 
 export interface BikeSelection {
   category: BikeCategory;
-  ridingStyleNotes?: string;
 }
 
 export interface IssueSelection {
   selected: PainPoint[];
-  freeText?: string;
 }
 
 export interface MeasurementValue {

@@ -394,8 +394,9 @@ export function usePoseCapture() {
   const captureFrame = useCallback((view: ViewType, stageId: string) => {
     const video = videoRef.current;
     const landmarker = landmarkerRef.current;
+    const canvas = canvasRef.current;
 
-    if (!video || !landmarker || video.readyState < 2) {
+    if (!video || !landmarker || !canvas || video.readyState < 2) {
       return false;
     }
 
@@ -422,6 +423,7 @@ export function usePoseCapture() {
         stageId,
         landmarks: smoothedLandmarks,
         confidence,
+        imageDataUrl: canvas.toDataURL('image/jpeg', 0.85),
       },
     ]);
 
