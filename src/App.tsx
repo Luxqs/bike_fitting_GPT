@@ -36,6 +36,7 @@ const TRACKED_PARTS: Array<{ index: number; label: string }> = [
   { index: 27, label: 'Left foot' },
   { index: 28, label: 'Right foot' },
 ];
+const NO_ISSUES_OPTION: PainPoint = 'No issues, just sizing a new bike';
 
 function isPointVisible(
   landmarks: LandmarkPoint[],
@@ -224,17 +225,28 @@ export default function App() {
     updateAppState((previous) => {
       const withoutCurrent = previous.issues.selected.filter((item) => item !== painPoint);
       const selected = checked
-        ? [...withoutCurrent.filter((item) => item !== 'No issues, just sizing a new bike'), painPoint]
+        ? painPoint === NO_ISSUES_OPTION
+          ? [NO_ISSUES_OPTION]
+          : [...withoutCurrent.filter((item) => item !== NO_ISSUES_OPTION), painPoint]
         : withoutCurrent;
 
       return {
         ...previous,
         issues: {
           ...previous.issues,
-          selected: selected.length ? selected : ['No issues, just sizing a new bike'],
+          selected: selected.length ? selected : [NO_ISSUES_OPTION],
         },
       };
     });
+  };
+
+  const parseOptionalNumber = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
   };
 
   const skipCurrentStage = () => {
@@ -569,10 +581,10 @@ export default function App() {
   const renderManual = () => (
     <WizardLayout title="Manual measurements fallback" stepIndex={stepIndex} totalSteps={totalSteps} onBack={prevStep} onNext={nextStep}>
       <div className="grid four">
-        <Field label="Inseam (cm)" type="number" value={state.manualMeasurements.inseamCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('inseamCm', Number(e.target.value))} />
-        <Field label="Arm span (cm)" type="number" value={state.manualMeasurements.armSpanCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('armSpanCm', Number(e.target.value))} />
-        <Field label="Shoulder width (cm)" type="number" value={state.manualMeasurements.shoulderWidthCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('shoulderWidthCm', Number(e.target.value))} />
-        <Field label="Torso length (cm)" type="number" value={state.manualMeasurements.torsoLengthCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('torsoLengthCm', Number(e.target.value))} />
+        <Field label="Inseam (cm)" type="number" value={state.manualMeasurements.inseamCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('inseamCm', parseOptionalNumber(e.target.value))} />
+        <Field label="Arm span (cm)" type="number" value={state.manualMeasurements.armSpanCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('armSpanCm', parseOptionalNumber(e.target.value))} />
+        <Field label="Shoulder width (cm)" type="number" value={state.manualMeasurements.shoulderWidthCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('shoulderWidthCm', parseOptionalNumber(e.target.value))} />
+        <Field label="Torso length (cm)" type="number" value={state.manualMeasurements.torsoLengthCm ?? ''} onChange={(e: ChangeEvent<HTMLInputElement>) => updateManualMeasurement('torsoLengthCm', parseOptionalNumber(e.target.value))} />
       </div>
       <div className="card">
         <h3>Camera estimate preview</h3>
