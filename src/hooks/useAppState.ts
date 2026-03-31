@@ -6,15 +6,11 @@ const STORAGE_KEY = 'bikefit-camera-state-v1';
 const defaultState: AppState = {
   step: 'welcome',
   riderProfile: {
-    riderId: '',
     heightCm: 175,
-    weightKg: 70,
     flexibilityLevel: 'moderate',
-    experienceLevel: 'intermediate',
     ridingGoal: 'balanced',
     rideType: 'Endurance / long rides',
     preferredTerrain: 'Paved road',
-    shoeSize: 43,
   },
   manualMeasurements: {},
   capturedFrames: [],
@@ -43,9 +39,6 @@ function loadInitialState(): AppState {
         ...parsed.riderProfile,
         rideType: parsed.riderProfile?.rideType || defaultState.riderProfile.rideType,
         preferredTerrain: parsed.riderProfile?.preferredTerrain || defaultState.riderProfile.preferredTerrain,
-        currentBikeType: parsed.riderProfile?.currentBikeType || undefined,
-        ageRange: parsed.riderProfile?.ageRange || undefined,
-        biologicalSex: parsed.riderProfile?.biologicalSex || undefined,
       },
       manualMeasurements: {
         ...defaultState.manualMeasurements,

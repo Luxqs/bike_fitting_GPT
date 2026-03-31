@@ -59,6 +59,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .results-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
 .metric { font-size: 28px; font-weight: 700; }
 .helper { color: #6b7280; font-size: 14px; }
+.helper.success { color: #166534; font-weight: 600; }
 .status-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
 .status-pill { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; background: #e5e7eb; font-size: 13px; }
 .status-good { background: #dcfce7; color: #166534; }
@@ -104,10 +105,36 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .hold-progress {
   margin-bottom: 12px;
 }
+.capture-thumbs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.capture-thumb {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 6px;
+  background: #f9fafb;
+}
+.capture-thumb img {
+  width: 100%;
+  height: 70px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+  margin-bottom: 4px;
+}
+.capture-thumb span {
+  display: block;
+  font-size: 11px;
+  color: #374151;
+}
 pre { white-space: pre-wrap; word-break: break-word; }
 ul { margin-top: 8px; }
 @media (max-width: 900px) {
   .grid.two, .grid.three, .grid.four, .results-grid, .checkbox-grid { grid-template-columns: 1fr; }
+  .capture-thumbs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .page-shell { padding: 16px; }
   .camera-shell {
     min-height: 320px;

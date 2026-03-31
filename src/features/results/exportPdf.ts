@@ -67,7 +67,7 @@ export function exportFitPdf(state: AppState) {
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  addParagraph(`Rider: ${state.riderProfile.riderId || 'N/A'}`);
+  addParagraph('Rider profile: camera-guided assessment');
   addParagraph(`Bike category: ${state.bikeSelection.category}`);
   addParagraph(`Ride type: ${state.riderProfile.rideType}`);
   addParagraph(`Terrain: ${state.riderProfile.preferredTerrain}`);
